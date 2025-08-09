@@ -20,16 +20,20 @@
     table{border-collapse:collapse;width:100%}
     th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
     th{position:sticky;top:58px;background:#0f1722;z-index:1}
-    .cell{min-width:38px}
+    /* ~30% narrower value cells */
+    .cell{min-width:26px;padding:4px 6px}
     .g{background:#0f3;color:#061}
-    .y{background:#dd0;color:#3b2}
+    .y{background:#ffea5a !important;color:#111 !important} /* yellow w/ dark text */
     .r{background:#b22;color:#fee}
     .legend{display:flex;gap:8px;align-items:center}
     .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
-    .box.g{background:#0f3}.box.y{background:#dd0}.box.r{background:#b22}
+    .box.g{background:#0f3}.box.y{background:#ffea5a}.box.r{background:#b22}
     .note{margin-top:6px}
     .small{font-size:12px}
-    td.label{text-align:left}
+    td.label{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;min-width:160px}
+    /* clamp Group column width */
+    th:first-child, td:first-child{max-width:200px;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    select{background:#0e141b;color:var(--text);border:1px solid #2b3a4c;border-radius:8px;padding:6px 8px}
   </style>
 </head>
 <body>
@@ -40,6 +44,16 @@
       <div class="toggle" title="Calculation engine">
         <button id="modeV1">CMF only</button>
         <button id="modeV2">Composite (Price+Flow)</button>
+      </div>
+      <div class="row">
+        <label class="muted small">Sort by</label>
+        <select id="sortBy" title="Sorting">
+          <option value="ticker">Ticker (A→Z)</option>
+          <option value="group">Group (A→Z)</option>
+          <option value="latest">Latest week (desc)</option>
+          <option value="avg12">12‑week average (desc)</option>
+          <option value="mom4">4‑week momentum (desc)</option>
+        </select>
       </div>
       <button id="btnRefresh">Refresh</button>
       <div class="legend small">
@@ -56,8 +70,7 @@
   </header>
 
   <main>
-    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage) **per pill**. Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
-    </div>
+    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage) <b>per pill</b>. Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.</div>
     <div id="status" class="small muted" style="margin:8px 0 14px"></div>
     <div id="tableWrap"></div>
   </main>
@@ -115,6 +128,7 @@ const urlInput = document.getElementById('csvUrl');
 const btnSave = document.getElementById('btnSaveUrl');
 const btnRefresh = document.getElementById('btnRefresh');
 const statusEl = document.getElementById('status');
+const sortSel = document.getElementById('sortBy');
 
 function setActive(which){
   active = which === 'sectors' ? 'sectors' : 'industries';
@@ -129,12 +143,14 @@ function setActive(which){
     modeV1.classList.toggle('active', mode==='v1');
     modeV2.classList.toggle('active', mode==='v2');
   }
+  // If we already have data cached, just re-render for this pill
+  if (window._heat) render();
 }
 
 pillS.onclick = ()=>{ setActive('sectors'); };
 pillI.onclick = ()=>{ setActive('industries'); };
-modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
-modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
+modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); render(); };
+modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); render(); };
 btnSave.onclick = ()=>{
   const v = (urlInput?.value || '').trim();
   if(!v){ alert('Paste a published CSV URL first.'); return; }
@@ -142,6 +158,7 @@ btnSave.onclick = ()=>{
   flash(`Saved ${active} URL.`);
 };
 btnRefresh.onclick = ()=> loadActive();
+sortSel.onchange = ()=> render();
 
 function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
 
@@ -227,7 +244,7 @@ async function buildHeatmap(url){
 
     // v2 composite: EWMA of CMF & Return → cross-section percentiles → 65/35 combine
     function ewma(arr, lambda){ let s=null; const out={}; for(const {w,value} of arr){ s=(s==null)?value:(lambda*s+(1-lambda)*value); out[w]=s; } return out; }
-    const LAMBDA = 0.92; // ~7-week half-life (heavier recent weight)
+    const LAMBDA = 0.92; // ~7-week half-life
     const flowEW = {}; const perfEW = {};
     for(const t in wkByT){
       const seqF = []; const seqR = [];
@@ -242,28 +259,68 @@ async function buildHeatmap(url){
     const compPct = {}; // 65% Flow, 35% Perf
     for(const t in wkByT){ for(const w of wkArr){ const f=(flowPct[t]||{})[w]; const p=(perfPct[t]||{})[w]; if(f==null||p==null) continue; const v=Math.round(0.65*f + 0.35*p); (compPct[t] ||= {})[w]=v; } }
 
-    // Render
-    const names = Object.keys(wkByT).sort();
-    const th = ['<th>Group</th>','<th>Ticker</th>'].concat(wkArr.map(w=>`<th class=\"cell\">${w.slice(5)}</th>`)).join('');
-    let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
-    for(const t of names){
-      const labelMap = LABELS[active] || {}; const label = labelMap[t] || '';
-      html += `<tr><td class=\"label\">${label}</td><td>${t}</td>`;
-      for(const w of wkArr){
-        const val = (mode==='v2' ? (compPct[t]||{})[w] : (pctV1[t]||{})[w]);
-        const cls = val==null? '' : (val>=80? 'g' : val>=60? 'y' : 'r');
-        html += `<td class=\"cell ${cls}\">${val??''}</td>`;
-      }
-      html += '</tr>';
-    }
-    html += '</tbody></table>';
-    document.getElementById('tableWrap').innerHTML = html;
+    // cache and render
+    window._heat = { wkArr, pctV1, compPct, wkByT };
+    render();
     const modeLabel = (mode==='v2'?'Composite (Price+Flow)':'CMF only');
-    flash(`Loaded ${names.length} tickers • ${wkArr.length} weeks from ${active} • Mode: ${modeLabel}.`);
+    flash(`Loaded ${Object.keys(wkByT).length} tickers • ${wkArr.length} weeks from ${active} • Mode: ${modeLabel}.`);
   }catch(err){
     console.error(err);
     alert(err.message || 'Could not load/parse CSV');
   }
+}
+
+// helpers for sorting/rendering
+function getVal(t,w){
+  const H = window._heat; if(!H) return null;
+  return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w];
+}
+function avg(arr){ const f=arr.filter(v=>v!=null); return f.length? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null; }
+
+function render(){
+  const H = window._heat; if(!H) return;
+  const { wkArr, pctV1, compPct, wkByT } = H;
+  const names = Object.keys(wkByT);
+  const latest = wkArr[wkArr.length-1];
+  const sortBy = (sortSel?.value)||'ticker';
+
+  // build sortable rows
+  const rows = names.map(t=>{
+    const label = (LABELS[active]||{})[t] || '';
+    const series = wkArr.map(w => getVal(t,w));
+    const latestVal = getVal(t, latest);
+    const avg12 = avg(series);
+    const mom4 = (()=>{
+      const i = wkArr.length-1, j = wkArr.length-5;
+      const a = getVal(t, wkArr[i]), b = j>=0 ? getVal(t, wkArr[j]) : null;
+      return (a!=null && b!=null) ? (a-b) : null;
+    })();
+    return { t, label, latestVal, avg12, mom4 };
+  });
+
+  rows.sort((A,B)=>{
+    switch(sortBy){
+      case 'group': return (A.label||'').localeCompare(B.label||'') || A.t.localeCompare(B.t);
+      case 'latest': return (B.latestVal??-1) - (A.latestVal??-1) || A.t.localeCompare(B.t);
+      case 'avg12':  return (B.avg12??-1)    - (A.avg12??-1)    || A.t.localeCompare(B.t);
+      case 'mom4':   return (B.mom4??-1)     - (A.mom4??-1)     || A.t.localeCompare(B.t);
+      default:       return A.t.localeCompare(B.t);
+    }
+  });
+
+  const th = ['<th>Group</th>','<th>Ticker</th>'].concat(wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
+  let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
+  for(const R of rows){
+    html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`;
+    for(const w of H.wkArr){
+      const val = getVal(R.t, w);
+      const cls = val==null? '' : (val>=80? 'g' : val>=60? 'y' : 'r');
+      html += `<td class="cell ${cls}">${val??''}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('tableWrap').innerHTML = html;
 }
 
 // Safe startup after DOM is ready
