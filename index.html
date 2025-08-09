@@ -29,6 +29,7 @@
     .box.g{background:#0f3}.box.y{background:#dd0}.box.r{background:#b22}
     .note{margin-top:6px}
     .small{font-size:12px}
+    td.label{text-align:left}
   </style>
 </head>
 <body>
@@ -55,7 +56,7 @@
   </header>
 
   <main>
-    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage). Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
+    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage) **per pill**. Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
     </div>
     <div id="status" class="small muted" style="margin:8px 0 14px"></div>
     <div id="tableWrap"></div>
@@ -66,12 +67,12 @@
 const KEYS = { sectors: 'heatmap_url_sectors', industries: 'heatmap_url_industries' };
 const MODE_KEY = 'heatmap_mode'; // 'v1' or 'v2'
 
-// Pre-fill Industry Groups with the URL you provided earlier
+// Pre-fill Industry Groups with your provided URL (first-run convenience)
 if (!localStorage.getItem(KEYS.industries)) {
   localStorage.setItem(KEYS.industries, 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv');
 }
 
-// Label maps so we can show Sector / Sector-Group before the ticker
+// Label maps so we can show Sector / Sector–Group before the ticker
 const LABELS = {
   sectors: {
     XLB: 'Materials', XLE: 'Energy', XLF: 'Financials', XLI: 'Industrials', XLK: 'Information Technology',
@@ -116,12 +117,18 @@ const btnRefresh = document.getElementById('btnRefresh');
 const statusEl = document.getElementById('status');
 
 function setActive(which){
-  active = which; localStorage.setItem('heatmap_active', which);
-  pillS.classList.toggle('active', which==='sectors');
-  pillI.classList.toggle('active', which==='industries');
-  urlInput.value = localStorage.getItem(KEYS[which]) || '';
-  modeV1.classList.toggle('active', mode==='v1');
-  modeV2.classList.toggle('active', mode==='v2');
+  active = which === 'sectors' ? 'sectors' : 'industries';
+  localStorage.setItem('heatmap_active', active);
+  if (pillS && pillI) {
+    pillS.classList.toggle('active', active==='sectors');
+    pillI.classList.toggle('active', active==='industries');
+  }
+  const saved = localStorage.getItem(KEYS[active]) || '';
+  if (urlInput) urlInput.value = saved;
+  if (modeV1 && modeV2) {
+    modeV1.classList.toggle('active', mode==='v1');
+    modeV2.classList.toggle('active', mode==='v2');
+  }
 }
 
 pillS.onclick = ()=>{ setActive('sectors'); };
@@ -129,7 +136,7 @@ pillI.onclick = ()=>{ setActive('industries'); };
 modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
 modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
 btnSave.onclick = ()=>{
-  const v = urlInput.value.trim();
+  const v = (urlInput?.value || '').trim();
   if(!v){ alert('Paste a published CSV URL first.'); return; }
   localStorage.setItem(KEYS[active], v);
   flash(`Saved ${active} URL.`);
@@ -137,20 +144,6 @@ btnSave.onclick = ()=>{
 btnRefresh.onclick = ()=> loadActive();
 
 function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
-
-setActive(active); };
-modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
-btnSave.onclick = ()=>{
-  const v = urlInput.value.trim();
-  if(!v){ alert('Paste a published CSV URL first.'); return; }
-  localStorage.setItem(KEYS[active], v);
-  flash(`Saved ${active} URL.`);
-};
-btnRefresh.onclick = ()=> loadActive();
-
-function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
-
-setActive(active);
 
 // ====== CSV → weekly CMF (v1) and Composite (v2) ======
 async function loadActive(){
@@ -175,7 +168,7 @@ async function buildHeatmap(url){
     // Parse per-ticker daily bars
     const byT = {};
     for(const r of rows){
-      const t = r[idx.ticker];
+      const t = (r[idx.ticker]||'').toUpperCase();
       const d = new Date(r[idx.date]);
       const o = +r[idx.open], h = +r[idx.high], l = +r[idx.low], c = +r[idx.close], v = +r[idx.volume];
       if(!t || !isFinite(c) || !isFinite(h) || !isFinite(l) || !isFinite(v) || h<=l) continue;
@@ -255,7 +248,7 @@ async function buildHeatmap(url){
     let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
     for(const t of names){
       const labelMap = LABELS[active] || {}; const label = labelMap[t] || '';
-      html += `<tr><td style=\"text-align:left\">${label}</td><td>${t}</td>`;
+      html += `<tr><td class=\"label\">${label}</td><td>${t}</td>`;
       for(const w of wkArr){
         const val = (mode==='v2' ? (compPct[t]||{})[w] : (pctV1[t]||{})[w]);
         const cls = val==null? '' : (val>=80? 'g' : val>=60? 'y' : 'r');
@@ -273,8 +266,17 @@ async function buildHeatmap(url){
   }
 }
 
-// Auto-load
-loadActive();
+// Safe startup after DOM is ready
+window.addEventListener('DOMContentLoaded', () => {
+  try {
+    setActive(active);
+    loadActive();
+  } catch (e) {
+    console.error(e);
+    const s = document.getElementById('status');
+    if (s) s.textContent = 'Init error: ' + (e.message || e);
+  }
+});
 </script>
 </body>
 </html>
