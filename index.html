@@ -22,6 +22,7 @@
     /* final, authoritative rules */
     .cell{ min-width:18px; padding:4px 6px; }   /* narrower cells */
     .g{ background:#0f3; color:#061; }
+    /* yellow with dark text – keep only this one */
     .y{ background:#ffea5a !important; color:#000 !important; }
     .r{ background:#b22; color:#fee; }
     .legend{display:flex;gap:8px;align-items:center}
@@ -131,10 +132,6 @@ let mode = localStorage.getItem(MODE_KEY) || 'v2';
 let LOOKBACK_N = +(localStorage.getItem(N_KEY) || 12);
 let HALF_LIFE  = +(localStorage.getItem(H_KEY) || 7);
 
-// --- new: liquidity filter (EWMA dollar-volume threshold) ---
-const ENABLE_DOLLAR_VOL_FILTER = true;
-const MIN_DOLLAR_VOL_EWMA = 5e6; // tune as you like
-
 const pillS = document.getElementById('pillSectors');
 const pillI = document.getElementById('pillIndustries');
 const modeV1 = document.getElementById('modeV1');
@@ -191,11 +188,8 @@ function weekKey(dt){
   x.setUTCDate(x.getUTCDate()+offset); x.setUTCHours(0,0,0,0);
   return x.toISOString().slice(0,10);
 }
-function lambdaFromHalfLife(H){ return Math.pow(0.5, 1/Math.max(1, H)); } // keeps your original half-life math
-function clamp(x, lo, hi){ return Math.max(lo, Math.min(hi, x)); }
-
-// Simple EWMA step: s_t = λ s_{t-1} + (1-λ) x_t
-function ewmaStep(prev, x, lambda){ return (prev==null) ? x : (lambda*prev + (1-lambda)*x); }
+function lambdaFromHalfLife(H){ return Math.pow(0.5, 1/Math.max(1, H)); }
+function ewma(arr, lambda){ let s=null; const out={}; for(const {w,value} of arr){ s=(s==null)?value:(lambda*s+(1-lambda)*value); out[w]=s; } return out; }
 
 // ===== data build =====
 async function loadActive(){
@@ -222,8 +216,7 @@ async function buildHeatmap(url){
       const t = (r[idx.ticker]||'').toUpperCase();
       const d = new Date(r[idx.date]);
       const o = +r[idx.open], h = +r[idx.high], l = +r[idx.low], c = +r[idx.close], v = +r[idx.volume];
-      if(!t || !isFinite(c) || !isFinite(h) || !isFinite(l) || !isFinite(v)) continue; // guard NaNs
-      if(h < l) continue; // bad bar
+      if(!t || !isFinite(c) || !isFinite(h) || !isFinite(l) || !isFinite(v) || h<=l) continue;
       (byT[t] ||= []).push({d,o,h,l,c,v});
     }
     for(const t in byT){ byT[t].sort((a,b)=>a.d-b.d); }
@@ -231,64 +224,41 @@ async function buildHeatmap(url){
     const weeks = new Set();
     const wkByT = {};
     for(const t in byT){
-      const weekMap = {}; let prevFriClose = null;
-      // weekly accumulator
-      let acc = { mfv:0, vol:0, dollar:0, close:null };
-      let curW = null;
-
-      function closeWeek(){
-        // Weekly CMF = Σ(MFV) / Σ(Vol), with MFM winsorized and zero/NaN vol ignored
-        const cmf = acc.vol>0 ? (acc.mfv / acc.vol) : 0;
-        const retLog = (prevFriClose!=null && acc.close!=null && prevFriClose>0 && acc.close>0)
-          ? Math.log(acc.close/prevFriClose)
-          : 0;
-        weekMap[curW] = { cmf, retLog, dollar: acc.dollar };
-        prevFriClose = acc.close;
-        acc = { mfv:0, vol:0, dollar:0, close:null };
-      }
-
+      const weekMap = {}; let prevFriClose = null; let acc = {}; let curW = null;
       for(const bar of byT[t]){
         const w = weekKey(bar.d);
-        if(curW && w !== curW){ closeWeek(); }
+        if(curW && w !== curW){
+          const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
+          const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
+          weekMap[curW] = {cmf, ret}; prevFriClose = acc.close; acc = {};
+        }
         curW = w;
-        // --- MFM/MFV with edge guards & winsorization ---
-        let mfm = 0;
-        if (bar.h === bar.l) {
-          // H==L → define MFM=0 (your edge case)
-          mfm = 0;
-        } else {
-          mfm = ((bar.c - bar.l) - (bar.h - bar.c)) / (bar.h - bar.l);
-          mfm = clamp(mfm, -1, 1); // winsorize to [-1, +1]
-        }
-        if (bar.v > 0 && isFinite(bar.v)) {           // treat zero/NaN volumes as missing
-          const mfv = mfm * bar.v;
-          acc.mfv += mfv;
-          acc.vol += bar.v;
-          acc.dollar += Math.max(0, bar.c) * bar.v;   // dollar volume
-        }
-        acc.close = bar.c;
-        weeks.add(w);
+        const mfm = ((bar.c - bar.l) - (bar.h - bar.c)) / (bar.h - bar.l);
+        const mfv = mfm * bar.v;
+        acc.mfv = (acc.mfv||0) + (isFinite(mfv)? mfv: 0);
+        acc.vol = (acc.vol||0) + (isFinite(bar.v)? bar.v: 0);
+        acc.close = bar.c; weeks.add(w);
       }
-      if(curW){ closeWeek(); }
+      if(curW){
+        const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
+        const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
+        weekMap[curW] = {cmf, ret};
+      }
       wkByT[t] = weekMap;
     }
 
     const allWeeks = Array.from(weeks).sort();
     const wkArr = allWeeks.slice(-Math.max(1, LOOKBACK_N));
 
-    // v1 (CMF-only) — cross-sectional percentile of weekly CMF
+    // v1 (CMF-only)
     const pctV1 = {};
     for(const w of wkArr){
-      const pair = [];
-      for(const t in wkByT){
-        const hit = wkByT[t][w];
-        if(hit) pair.push([t, hit.cmf]);
-      }
+      const pair = []; for(const t in wkByT){ const hit = wkByT[t][w]; if(hit) pair.push([t, hit.cmf]); }
       pair.sort((a,b)=>a[1]-b[1]); const n = pair.length;
       pair.forEach((p,i)=>{ (pctV1[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
     }
 
-    // v2 Composite — Flow: CMF via EWMA(MFV)/EWMA(Vol); Price: log-returns scaled by EWMA sigma
+    // v2 Composite
     const compPct = computeCompositePct(wkByT, wkArr, HALF_LIFE);
 
     window._heat = { wkArr, pctV1, compPct, wkByT };
@@ -298,175 +268,34 @@ async function buildHeatmap(url){
   }catch(err){ console.error(err); alert(err.message || 'Could not load/parse CSV'); }
 }
 
-// Recompute composite when half-life changes
-function recomputeComposite(){
-  const H = window._heat; if(!H) return;
-  H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE);
-}
-
-// --- NEW core: proper decayed CMF & volatility-scaled momentum ---
+function recomputeComposite(){ const H = window._heat; if(!H) return; H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE); }
 function computeCompositePct(wkByT, wkArr, halfLife){
-  const λ = lambdaFromHalfLife(halfLife);
-  const tickers = Object.keys(wkByT);
-
-  const flowSeries = {};    // decayed CMF_t = EWMA(MFV)_t / EWMA(Vol)_t
-  const priceSeries = {};   // decayed momentum = retLog_t / EWMA(sigma)_t
-  const dvEwmaLatest = {};  // EWMA dollar volume for liquidity filter
-
-  for(const t of tickers){
-    let sMFV=null, sVOL=null, sDV=null, sVar=null; // EWMA states
-    const outF = {}; const outP = {};
-
-    for(const w of wkArr){
-      const hit = wkByT[t][w];
-      if(!hit) continue;
-
-      // Flow: update smoothed numerator/denominator separately
-      // Here we rebuild weekly MFV and Vol from stored CMF and Vol proxy:
-      // But we only stored weekly CMF and dollar; we need a weekly volume proxy.
-      // Trick: reconstruct MFV by CMF * Vol; we also carry a pseudo-Vol weight.
-      // To do it cleanly, compute weekly MFV and Vol earlier; we used acc.vol — store vol too.
-      // Backwards compat: if weekly vol wasn't stored, approximate Vol via dollar/close — but we stored none.
-      // So store both in wkByT earlier (we’ll add vol in build step).
-    }
-
-    flowSeries[t] = outF;
-    priceSeries[t] = outP;
-  }
-
-  // The above loop needs weekly vol; we’ll fill it after ensuring build stored it.
-  // To keep the function pure, re-iterate using the stored mfv/vol if present.
-
-  // Re-run with the stored fields (mfvW, volW) — see buildHeatmap edits.
-  for(const t of tickers){
-    let sMFV=null, sVOL=null, sDV=null, sVar=null;
-    const outF = {}; const outP = {};
-    for(const w of wkArr){
-      const hit = wkByT[t][w];
-      if(!hit) continue;
-
-      // Flow
-      if (isFinite(hit.mfvW) && isFinite(hit.volW) && hit.volW > 0) {
-        sMFV = ewmaStep(sMFV, hit.mfvW, λ);
-        sVOL = ewmaStep(sVOL, hit.volW, λ);
-      }
-      const cmfDecayed = (sVOL && sVOL>0) ? (sMFV / sVOL) : null;
-      if (cmfDecayed!=null) outF[w] = cmfDecayed;
-
-      // Liquidity EWMA (dollar-volume)
-      if (isFinite(hit.dollar)) sDV = ewmaStep(sDV, hit.dollar, λ);
-
-      // Price momentum: log-return / EWMA(σ)
-      if (isFinite(hit.retLog)) {
-        sVar = ewmaStep(sVar, hit.retLog*hit.retLog, λ);
-        const sigma = sVar!=null ? Math.sqrt(Math.max(1e-12, sVar)) : null;
-        const momScaled = (sigma ? (hit.retLog / sigma) : null);
-        if (momScaled!=null) outP[w] = momScaled;
-      }
-    }
-    flowSeries[t] = outF; priceSeries[t] = outP;
-    dvEwmaLatest[t] = sDV==null ? 0 : sDV;
-  }
-
-  // Cross-sectional percentile per week, excluding illiquid (optional)
-  const eligible = new Set(
-    ENABLE_DOLLAR_VOL_FILTER
-      ? Object.keys(dvEwmaLatest).filter(t => dvEwmaLatest[t] >= MIN_DOLLAR_VOL_EWMA)
-      : Object.keys(wkByT)
-  );
-
-  function xsec(map){
-    const out = {};
-    for(const w of wkArr){
-      const pair = [];
-      for(const t in map){
-        if(!eligible.has(t)) continue;
-        const v = map[t][w];
-        if(v!=null && isFinite(v)) pair.push([t, v]);
-      }
-      pair.sort((a,b)=>a[1]-b[1]); const n = pair.length;
-      for(let i=0;i<n;i++){
-        const t = pair[i][0];
-        (out[t] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50;
-      }
-    }
-    return out;
-  }
-
-  const fPct = xsec(flowSeries);
-  const pPct = xsec(priceSeries);
-  const out = {};
-
-  for(const t in wkByT){
-    for(const w of wkArr){
-      const f = (fPct[t]||{})[w], p = (pPct[t]||{})[w];
-      if(f==null || p==null) continue;
-      (out[t] ||= {})[w] = Math.round(0.65*f + 0.35*p); // flow-first blend
-    }
-  }
+  const L = lambdaFromHalfLife(halfLife);
+  const flowEW = {}, perfEW = {};
+  for(const t in wkByT){ const sF=[], sR=[]; for(const w of wkArr){ const hit=wkByT[t][w]; if(!hit) continue; sF.push({w,value:hit.cmf}); sR.push({w,value:hit.ret}); } flowEW[t]=ewma(sF,L); perfEW[t]=ewma(sR,L); }
+  function xsec(map){ const out={}; for(const w of wkArr){ const pair=[]; for(const t in map){ if(map[t][w]!=null) pair.push([t,map[t][w]]);} pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w]= n>1? Math.round(i*100/(n-1)) : 50;}); } return out; }
+  const fPct = xsec(flowEW), pPct = xsec(perfEW), out={};
+  for(const t in wkByT){ for(const w of wkArr){ const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w]; if(f==null||p==null) continue; (out[t] ||= {})[w] = Math.round(0.65*f + 0.35*p); } }
   return out;
 }
 
 // ===== render =====
-function getVal(t,w){
-  const H = window._heat; if(!H) return null;
-  return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w];
-}
-function avg(arr){
-  const f = arr.filter(v=>v!=null);
-  return f.length ? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null;
-}
+function getVal(t,w){ const H = window._heat; if(!H) return null; return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w]; }
+function avg(arr){ const f = arr.filter(v=>v!=null); return f.length ? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null; }
 
 function render(){
-  const H = window._heat; if(!H) return;
-  const { wkArr, wkByT } = H;
-  const names = Object.keys(wkByT);
-  const latest = wkArr[wkArr.length-1];
-  const sortBy = (sortSel?.value)||'ticker';
-
-  const rows = names.map(t=>{
-    const label=(LABELS[active]||{})[t]||'';
-    const series=wkArr.map(w=>getVal(t,w));
-    const latestVal=getVal(t,latest);
-    const avgN=avg(series);
-    const mom4 = (()=>{ const i=wkArr.length-1, j=Math.max(0,wkArr.length-5);
-      const a=getVal(t,wkArr[i]), b=(wkArr.length>4)?getVal(t,wkArr[j]):null;
-      return (a!=null&&b!=null)?(a-b):null; })();
-    return { t,label,latestVal,avgN,mom4 };
-  });
-
-  rows.sort((A,B)=>{
-    switch(sortBy){
-      case 'group': return (A.label||'').localeCompare(B.label||'')||A.t.localeCompare(B.t);
-      case 'latest': return (B.latestVal??-1)-(A.latestVal??-1)||A.t.localeCompare(B.t);
-      case 'avgN': return (B.avgN??-1)-(A.avgN??-1)||A.t.localeCompare(B.t);
-      case 'mom4': return (B.mom4??-1)-(A.mom4??-1)||A.t.localeCompare(B.t);
-      default: return A.t.localeCompare(B.t);
-    }
-  });
-
+  const H = window._heat; if(!H) return; const { wkArr, wkByT } = H; const names = Object.keys(wkByT); const latest = wkArr[wkArr.length-1]; const sortBy = (sortSel?.value)||'ticker';
+  const rows = names.map(t=>{ const label=(LABELS[active]||{})[t]||''; const series=wkArr.map(w=>getVal(t,w)); const latestVal=getVal(t,latest); const avgN=avg(series); const mom4 = (()=>{ const i=wkArr.length-1, j=Math.max(0,wkArr.length-5); const a=getVal(t,wkArr[i]), b=(wkArr.length>4)?getVal(t,wkArr[j]):null; return (a!=null&&b!=null)?(a-b):null; })(); return { t,label,latestVal,avgN,mom4 }; });
+  rows.sort((A,B)=>{ switch(sortBy){ case 'group': return (A.label||'').localeCompare(B.label||'')||A.t.localeCompare(B.t); case 'latest': return (B.latestVal??-1)-(A.latestVal??-1)||A.t.localeCompare(B.t); case 'avgN': return (B.avgN??-1)-(A.avgN??-1)||A.t.localeCompare(B.t); case 'mom4': return (B.mom4??-1)-(A.mom4??-1)||A.t.localeCompare(B.t); default: return A.t.localeCompare(B.t);} });
   const th=['<th>Group</th>','<th>Ticker</th>'].concat(H.wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
   let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
-  for(const R of rows){
-    html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`;
-    for(const w of H.wkArr){
-      const val=getVal(R.t,w);
-      const cls = val==null? '' : (val>=80?'g' : val>=60?'y' : 'r');
-      html += `<td class="cell ${cls}">${val??''}</td>`;
-    }
-    html += '</tr>';
-  }
-  html += '</tbody></table>';
-  document.getElementById('tableWrap').innerHTML = html;
+  for(const R of rows){ html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`; for(const w of H.wkArr){ const val=getVal(R.t,w); const cls = val==null? '' : (val>=80?'g' : val>=60?'y' : 'r'); html += `<td class="cell ${cls}">${val??''}</td>`; } html += '</tr>'; }
+  html += '</tbody></table>'; document.getElementById('tableWrap').innerHTML = html;
 }
 
 // ===== boot =====
 window.addEventListener('DOMContentLoaded', () => {
-  try { setActive(active); loadActive(); }
-  catch(e){ console.error(e);
-    const s=document.getElementById('status');
-    if(s) s.textContent='Init error: '+(e.message||e);
-  }
+  try { setActive(active); loadActive(); } catch(e){ console.error(e); const s=document.getElementById('status'); if(s) s.textContent='Init error: '+(e.message||e); }
 });
 </script>
 </body>
