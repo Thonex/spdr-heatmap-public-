@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SPDR Sector Heatmap – 12 Weeks (CMF Percentile)</title>
+  <style>
+    :root{
+      --bg: #0b0d11; --card:#12151b; --muted:#9aa3ae; --grid:#1c222b; --green:#1f6f2e; --yellow:#7a6b1a; --red:#6e1f1f;
+      --greenHi:#29a24a; --yellowHi:#b59d1f; --redHi:#b92d2d; --accent:#4aa3ff;
+    }
+    html,body{height:100%; background:var(--bg); color:#e8edf3; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
+    h1{font-size:22px; margin:0 0 8px}
+    .sub{color:var(--muted); margin-bottom:16px}
+    .card{background:var(--card); border:1px solid #1e242d; border-radius:14px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .controls{display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px}
+    .controls label{font-size:12px; color:var(--muted)}
+    select, input[type="text"], button{background:#0f1319; color:#e8edf3; border:1px solid #2a3442; border-radius:10px; padding:8px 10px}
+    button{cursor:pointer}
+    .legend{display:flex; gap:10px; align-items:center; margin-left:auto}
+    .chip{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#cdd6e3}
+    .swatch{width:14px; height:14px; border-radius:4px; border:1px solid rgba(255,255,255,.15)}
+    .grid{overflow:auto; border-radius:12px; border:1px solid #1e242d}
+    table{border-collapse:separate; border-spacing:0; width:100%; min-width:900px}
+    thead th{position:sticky; top:0; background:#121720; z-index:1; color:#cbd5e1; font-weight:600; text-align:center}
+    th, td{padding:8px 10px; border-bottom:1px solid var(--grid); border-right:1px solid var(--grid)}
+    th:first-child, td:first-child{position:sticky; left:0; background:linear-gradient(90deg,#131822, #12151b); z-index:2}
+    th:first-child{z-index:3}
+    tbody tr:last-child td{border-bottom:none}
+    tbody td.value{font-variant-numeric:tabular-nums; text-align:center; font-weight:600}
+    .ticker{white-space:nowrap; font-weight:700}
+    .sector{color:var(--muted); font-weight:500}
+    .cell{border-radius:8px; padding:6px 8px}
+    .c-green{background:linear-gradient(180deg, rgba(41,162,74,.25), rgba(31,111,46,.3)); color:#dff6e6; border:1px solid rgba(41,162,74,.35)}
+    .c-yellow{background:linear-gradient(180deg, rgba(181,157,31,.25), rgba(122,107,26,.3)); color:#fff6d6; border:1px solid rgba(181,157,31,.35)}
+    .c-red{background:linear-gradient(180deg, rgba(185,45,45,.25), rgba(110,31,31,.3)); color:#ffe0e0; border:1px solid rgba(185,45,45,.35)}
+    .note{color:#aab4c2; font-size:12px; margin-top:10px}
+    .foot{color:#93a1b3; font-size:12px; margin-top:14px}
+    .link{color:var(--accent); text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SPDR Sector Heatmap – Last 12 Weeks</h1>
+    <div class="sub">Cells show <strong>weekly money-flow percentile</strong> (0–100) by sector ETF. Colors: <strong>green ≥ 75</strong>, <strong>yellow 50–74</strong>, <strong>red &lt; 50</strong>.
+      <br/>Model: <em>Chaikin Money Flow (CMF)</em> as a proxy for fund <em>inflows/outflows</em>, computed weekly; then ranked across sectors per week.
+    </div>
+
+    <div class="card">
+      <div class="controls">
+        <label>Sort rows by:
+          <select id="sortBy">
+            <option value="ticker">Ticker</option>
+            <option value="sector">Sector</option>
+            <option value="latest">Latest Week Percentile</option>
+            <option value="avg">12-Week Average Percentile</option>
+          </select>
+        </label>
+        <label>CSV URL (optional): <input type="text" id="csvUrl" placeholder="Paste published CSV from Google Sheets" size="44" /></label>
+        <button id="loadCsv">Load CSV</button>
+        <div class="legend">
+          <span class="chip"><span class="swatch" style="background:var(--redHi)"></span> &lt; 50</span>
+          <span class="chip"><span class="swatch" style="background:var(--yellowHi)"></span> 50–74</span>
+          <span class="chip"><span class="swatch" style="background:var(--greenHi)"></span> ≥ 75</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <table id="heat"></table>
+      </div>
+      <div class="note">
+        <strong>How to feed live data:</strong> Publish a Google Sheet with columns <code>date,ticker,open,high,low,close,volume</code> for the 11 sector SPDRs (XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY, XLRE, XLC). Use daily rows covering at least the last 13 weeks. Click <em>File → Share → Publish to web</em> and choose <em>CSV link</em>. Paste the URL above and click <em>Load CSV</em>. This page will aggregate to weekly, compute CMF per week, then percentile-rank across sectors.
+      </div>
+    </div>
+
+    <div class="foot">Sectors are the 11 GICS sectors via SPDR ETFs: XLB (Materials), XLE (Energy), XLF (Financials), XLI (Industrials), XLK (Info Tech), XLP (Consumer Staples), XLU (Utilities), XLV (Health Care), XLY (Consumer Discretionary), XLRE (Real Estate), XLC (Communication Services).
+    </div>
+  </div>
+
+<script>
+// -------------------- CONFIG --------------------
+const SECTORS = [
+  { ticker: 'XLB', name: 'Materials' },
+  { ticker: 'XLE', name: 'Energy' },
+  { ticker: 'XLF', name: 'Financials' },
+  { ticker: 'XLI', name: 'Industrials' },
+  { ticker: 'XLK', name: 'Information Technology' },
+  { ticker: 'XLP', name: 'Consumer Staples' },
+  { ticker: 'XLU', name: 'Utilities' },
+  { ticker: 'XLV', name: 'Health Care' },
+  { ticker: 'XLY', name: 'Consumer Discretionary' },
+  { ticker: 'XLRE', name: 'Real Estate' },
+  { ticker: 'XLC', name: 'Communication Services' }
+];
+
+// Demo fallback data: 12 weeks of random percentiles for layout preview.
+// Replace by loading CSV to compute from OHLCV.
+const demoWeeks = (() => {
+  const today = new Date();
+  const weeks = [];
+  for (let i=11; i>=0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i*7);
+    // set to Friday (week ending) for labeling
+    const wd = d.getDay();
+    const diffToFri = (5 - wd + 7) % 7; // 5=Fri
+    d.setDate(d.getDate() + diffToFri);
+    weeks.push(d.toISOString().slice(0,10));
+  }
+  return weeks;
+})();
+
+let data = SECTORS.map(s => ({
+  ticker: s.ticker,
+  sector: s.name,
+  values: demoWeeks.map(_ => Math.round( (Math.random()*60) + 20 )) // 20–80 for demo
+}));
+
+// -------------------- CSV → CMF Pipeline --------------------
+// Expected CSV columns: date,ticker,open,high,low,close,volume
+// Multiple tickers interleaved by date.
+async function loadCSV(url){
+  // If running from file://, route through a permissive CORS proxy
+  const needsProxy = location.protocol === 'file:';
+  const proxied = needsProxy ? 'https://cors.isomorphic-git.org/' + url : url;
+
+  const res = await fetch(proxied);
+  if(!res.ok) throw new Error('Failed to fetch CSV: ' + res.status);
+
+  // Read and strip any UTF-8 BOM from start
+  const text = await res.text();
+  const clean = text.replace(/^\uFEFF/, '');
+
+  const rows = clean.trim().split(/\r?\n/).map(r => r.split(','));
+  const header = rows.shift().map(h => h.replace(/\uFEFF/g,'').trim().toLowerCase());
+  const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
+  const byTicker = {};
+  for(const r of rows){
+    const t = r[idx.ticker];
+    if(!SECTORS.find(s=>s.ticker===t)) continue; // ignore non-sector tickers
+    const rec = {
+      date: new Date(r[idx.date]),
+      open: parseFloat(r[idx.open]),
+      high: parseFloat(r[idx.high]),
+      low: parseFloat(r[idx.low]),
+      close: parseFloat(r[idx.close]),
+      volume: parseFloat(r[idx.volume])
+    };
+    if(!byTicker[t]) byTicker[t] = [];
+    if(Number.isFinite(rec.close) && Number.isFinite(rec.high) && Number.isFinite(rec.low) && Number.isFinite(rec.volume)){
+      byTicker[t].push(rec);
+    }
+  }
+  // sort by date
+  Object.values(byTicker).forEach(arr => arr.sort((a,b)=>a.date-b.date));
+
+  // Helper: get week-ending label (Friday)
+  const weekKey = (d)=>{
+    const dt = new Date(d);
+    const wd = dt.getDay();
+    const diffToFri = (5 - wd + 7) % 7;
+    dt.setDate(dt.getDate() + diffToFri);
+    return dt.toISOString().slice(0,10);
+  };
+
+  // Compute daily Money Flow Multiplier (MFM), Money Flow Volume (MFV)
+  // CMF over a week: sum(MFV) / sum(Volume) for that week
+  const weeklyCMF = {}; // { ticker: { week: cmf } }
+  for(const t of Object.keys(byTicker)){
+    const days = byTicker[t];
+    const buckets = {};
+    for(const d of days){
+      const range = d.high - d.low;
+      if(range <= 0) continue;
+      const mfm = ((d.close - d.low) - (d.high - d.close)) / range; // [-1,1]
+      const mfv = mfm * d.volume;
+      const wk = weekKey(d.date);
+      if(!buckets[wk]) buckets[wk] = { mfv:0, vol:0 };
+      buckets[wk].mfv += mfv;
+      buckets[wk].vol += d.volume;
+    }
+    weeklyCMF[t] = Object.fromEntries(Object.entries(buckets).map(([wk,v])=>[wk, v.vol>0 ? v.mfv / v.vol : 0]));
+  }
+
+  // Determine the 12 most recent weeks across all tickers
+  const allWeeks = new Set();
+  Object.values(weeklyCMF).forEach(obj=>Object.keys(obj).forEach(w=>allWeeks.add(w)));
+  const weekList = Array.from(allWeeks).sort().slice(-12);
+
+  // For each week, compute percentile ranks across sectors (0–100)
+  const valuesByWeek = {}; // { week: {ticker: pct} }
+  for(const wk of weekList){
+    const arr = SECTORS.map(s => ({
+      ticker: s.ticker,
+      val: (weeklyCMF[s.ticker] && Number.isFinite(weeklyCMF[s.ticker][wk])) ? weeklyCMF[s.ticker][wk] : NaN
+    }));
+    const valid = arr.filter(o=>!isNaN(o.val));
+    const sorted = [...valid].sort((a,b)=>a.val-b.val);
+    const pctMap = new Map();
+    sorted.forEach((o,i)=>{
+      const pct = Math.round( (i/(sorted.length-1||1)) * 100 );
+      pctMap.set(o.ticker, pct);
+    });
+    valuesByWeek[wk] = Object.fromEntries(SECTORS.map(s=>[s.ticker, pctMap.get(s.ticker) ?? 0]));
+  }
+
+  // Build final data array in the same shape as demo
+  data = SECTORS.map(s=>({
+    ticker: s.ticker,
+    sector: s.name,
+    values: weekList.map(wk=> valuesByWeek[wk][s.ticker])
+  }));
+  weeks = weekList;
+}
+
+let weeks = demoWeeks.slice();
+
+function colorClass(v){
+  if(v>=75) return 'c-green';
+  if(v>=50) return 'c-yellow';
+  return 'c-red';
+}
+
+function render(){
+  const sortBy = document.getElementById('sortBy').value;
+  const t = document.getElementById('heat');
+  const thead = [
+    '<thead><tr>',
+    '<th style="min-width:160px; text-align:left">Ticker / Sector</th>',
+    ...weeks.map(w=>`<th>${w}</th>`),
+    '<th>Avg</th>',
+    '</tr></thead>'
+  ].join('');
+
+  let rows = data.map(r=>{
+    const avg = r.values.reduce((a,b)=>a+b,0) / (r.values.length||1);
+    return {...r, avg: Math.round(avg), latest: r.values[r.values.length-1] };
+  });
+
+  if(sortBy==='sector') rows.sort((a,b)=>a.sector.localeCompare(b.sector));
+  else if(sortBy==='ticker') rows.sort((a,b)=>a.ticker.localeCompare(b.ticker));
+  else if(sortBy==='latest') rows.sort((a,b)=>b.latest - a.latest);
+  else if(sortBy==='avg') rows.sort((a,b)=>b.avg - a.avg);
+
+  const tbody = ['<tbody>'];
+  for(const r of rows){
+    tbody.push('<tr>');
+    tbody.push(`<th class="ticker">${r.ticker}<div class="sector">${r.sector}</div></th>`);
+    for(const v of r.values){
+      tbody.push(`<td class="value"><div class="cell ${colorClass(v)}">${v}</div></td>`);
+    }
+    tbody.push(`<td class="value"><div class="cell ${colorClass(r.avg)}">${r.avg}</div></td>`);
+    tbody.push('</tr>');
+  }
+  tbody.push('</tbody>');
+
+  t.innerHTML = thead + tbody.join('');
+}
+
+render();
+
+document.getElementById('sortBy').addEventListener('change', render);
+
+document.getElementById('loadCsv').addEventListener('click', async ()=>{
+  const url = document.getElementById('csvUrl').value.trim();
+  if(!url) return alert('Paste a published CSV URL from Google Sheets first.');
+  try{
+    await loadCSV(url);
+    render();
+  }catch(err){
+    console.error(err);
+    alert('Could not load/parse CSV. Ensure headers are: date,ticker,open,high,low,close,volume');
+  }
+});
+</script>
+</body>
+</html>
