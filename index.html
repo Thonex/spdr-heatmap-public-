@@ -71,8 +71,10 @@ th{position:sticky;top:58px;background:#0f1722;z-index:1}
 
     <div class="row">
       <label class="muted small">Active CSV URL</label>
+      <!--
       <input id="csvUrl" type="url" placeholder="Paste published CSV URL (output=csv)" />
       <button id="btnSaveUrl">Save URL</button>
+    -->
     </div>
     <div class="row">
       <label class="muted small">Lookback</label>
@@ -208,7 +210,10 @@ sortSel.onchange = ()=> render();
 function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
 
 async function loadActive(){
-  const url = localStorage.getItem(KEYS[active]);
+  const url = {
+  sectors: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRb0KGQYJoXfcLSE9_HUGVV513UrBMn3M5DhtqJHDyXgYLamBBsKQDwo7rR6Lvu-dTvU82ex9nt2igO/pub?gid=0&single=true&output=csv",
+  industryGroups: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv"
+}[active];
   if(!url){ alert(`No ${active} URL saved yet. Paste it above and click Save URL.`); return; }
   await buildHeatmap(url);
 }
