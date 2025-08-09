@@ -20,20 +20,17 @@
     table{border-collapse:collapse;width:100%}
     th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
     th{position:sticky;top:58px;background:#0f1722;z-index:1}
-    /* ~30% narrower number cells */
     .cell{min-width:26px;padding:4px 6px}
     .g{background:#0f3;color:#061}
-    .y{background:#ffea5a !important;color:#111 !important} /* yellow with dark text */
+    .y{background:#ffea5a !important;color:#111 !important}
     .r{background:#b22;color:#fee}
     .legend{display:flex;gap:8px;align-items:center}
     .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
     .box.g{background:#0f3}.box.y{background:#ffea5a}.box.r{background:#b22}
     .note{margin-top:6px}
     .small{font-size:12px}
-    /* clamp Group column + label */
     td.label{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;min-width:160px}
     th:first-child,td:first-child{max-width:200px;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    /* sort dropdown */
     select{background:#0e141b;color:var(--text);border:1px solid #2b3a4c;border-radius:8px;padding:6px 8px}
   </style>
 </head>
@@ -54,7 +51,7 @@
           <option value="ticker">Ticker (A→Z)</option>
           <option value="group">Group (A→Z)</option>
           <option value="latest">Latest week (desc)</option>
-          <option value="avg12">12‑week average (desc)</option>
+          <option id="optAvg" value="avgN">Window avg (desc)</option>
           <option value="mom4">4‑week momentum (desc)</option>
         </select>
       </div>
@@ -73,6 +70,25 @@
       <input id="csvUrl" type="url" placeholder="Paste published CSV URL (output=csv)" />
       <button id="btnSaveUrl">Save URL</button>
     </div>
+    <div class="row">
+      <label class="muted small">Lookback</label>
+      <select id="lookbackN" title="Number of weeks">
+        <option>8</option>
+        <option selected>12</option>
+        <option>16</option>
+        <option>20</option>
+        <option>26</option>
+      </select>
+
+      <label class="muted small">Half‑life (EWMA)</label>
+      <select id="halfLife" title="Weeks for EWMA half‑life">
+        <option>4</option>
+        <option selected>7</option>
+        <option>10</option>
+        <option>12</option>
+        <option>16</option>
+      </select>
+    </div>
   </header>
 
   <main>
@@ -85,16 +101,13 @@
   </main>
 
 <script>
-// ====== dataset storage ======
 const KEYS = { sectors: 'heatmap_url_sectors', industries: 'heatmap_url_industries' };
-const MODE_KEY = 'heatmap_mode'; // 'v1' or 'v2'
+const MODE_KEY = 'heatmap_mode';
 
-// Pre-fill Industry Groups with your provided URL (first-run convenience)
 if (!localStorage.getItem(KEYS.industries)) {
   localStorage.setItem(KEYS.industries, 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv');
 }
 
-// Label maps so we can show Sector / Sector–Group before the ticker
 const LABELS = {
   sectors: {
     XLB:'Materials', XLE:'Energy', XLF:'Financials', XLI:'Industrials', XLK:'Information Technology',
@@ -102,27 +115,16 @@ const LABELS = {
     XLRE:'Real Estate', XLC:'Communication Services'
   },
   industries: {
-    // ENERGY
     XOP:'Energy – Oil & Gas E&P', OIH:'Energy – Oil Services', FCG:'Energy – Natural Gas',
-    // MATERIALS
     XME:'Materials – Metals & Mining', XLB:'Materials – Broad',
-    // INDUSTRIALS
     ITA:'Industrials – Aerospace & Defense', IYT:'Industrials – Transportation', PAVE:'Industrials – Infrastructure', XLI:'Industrials – Broad',
-    // CONSUMER DISCRETIONARY
     ITB:'Consumer Discretionary – Home Construction', AUTO:'Consumer Discretionary – Autos/EV (composite)', XRT:'Consumer Discretionary – Retail', XLY:'Consumer Discretionary – Broad',
-    // CONSUMER STAPLES
     XLP:'Consumer Staples – Broad', VDC:'Consumer Staples – Broad (Vanguard)',
-    // HEALTH CARE
     IBB:'Health Care – Biotechnology', IHI:'Health Care – Medical Devices', PPH:'Health Care – Pharmaceuticals', XLV:'Health Care – Broad',
-    // FINANCIALS
     KBE:'Financials – Banks', KRE:'Financials – Regional Banks', XLF:'Financials – Broad',
-    // REAL ESTATE
     XLRE:'Real Estate – Select Sector REITs', VNQ:'Real Estate – Broad', IYR:'Real Estate – Broad (alt)',
-    // INFORMATION TECHNOLOGY
     SOXX:'Information Technology – Semiconductors', IGV:'Information Technology – Software', FDN:'Information Technology – Internet', CIBR:'Information Technology – Cybersecurity', XLK:'Information Technology – Broad',
-    // COMMUNICATION SERVICES
     XLC:'Communication Services – Broad', VOX:'Communication Services – Telecom',
-    // UTILITIES
     XLU:'Utilities – Broad', FUTY:'Utilities – Broad (alt)'
   }
 };
@@ -139,21 +141,47 @@ const btnSave = document.getElementById('btnSaveUrl');
 const btnRefresh = document.getElementById('btnRefresh');
 const statusEl = document.getElementById('status');
 const sortSel = document.getElementById('sortBy');
+const optAvg = document.getElementById('optAvg');
+
+const N_KEY = 'heatmap_lookback_weeks';
+const H_KEY = 'heatmap_half_life';
+const lookSel = document.getElementById('lookbackN');
+const halfSel = document.getElementById('halfLife');
+
+let LOOKBACK_N = +(localStorage.getItem(N_KEY) || 12);
+let HALF_LIFE  = +(localStorage.getItem(H_KEY) || 7);
+
+if (lookSel) lookSel.value = String(LOOKBACK_N);
+if (halfSel) halfSel.value = String(HALF_LIFE);
+updateAvgOptionLabel();
+
+lookSel.onchange = async () => {
+  LOOKBACK_N = +lookSel.value;
+  localStorage.setItem(N_KEY, LOOKBACK_N);
+  updateAvgOptionLabel();
+  await loadActive(); // rebuild from CSV to get full week set
+};
+
+halfSel.onchange = () => {
+  HALF_LIFE = +halfSel.value;
+  localStorage.setItem(H_KEY, HALF_LIFE);
+  recomputeComposite(); // re-derive comp using new λ, no refetch
+  render();
+};
+
+function updateAvgOptionLabel(){
+  if (optAvg) optAvg.textContent = `${LOOKBACK_N}‑week avg (desc)`;
+}
 
 function setActive(which){
   active = which === 'sectors' ? 'sectors' : 'industries';
   localStorage.setItem('heatmap_active', active);
-  if (pillS && pillI) {
-    pillS.classList.toggle('active', active==='sectors');
-    pillI.classList.toggle('active', active==='industries');
-  }
+  pillS.classList.toggle('active', active==='sectors');
+  pillI.classList.toggle('active', active==='industries');
   const saved = localStorage.getItem(KEYS[active]) || '';
-  if (urlInput) urlInput.value = saved;
-  if (modeV1 && modeV2) {
-    modeV1.classList.toggle('active', mode==='v1');
-    modeV2.classList.toggle('active', mode==='v2');
-  }
-  // If we already have data, just re-render for this pill
+  urlInput.value = saved;
+  modeV1.classList.toggle('active', mode==='v1');
+  modeV2.classList.toggle('active', mode==='v2');
   if (window._heat) render();
 }
 
@@ -172,11 +200,33 @@ sortSel.onchange = ()=> render();
 
 function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
 
-// ====== CSV → weekly CMF (v1) and Composite (v2) ======
 async function loadActive(){
   const url = localStorage.getItem(KEYS[active]);
   if(!url){ alert(`No ${active} URL saved yet. Paste it above and click Save URL.`); return; }
   await buildHeatmap(url);
+}
+
+function weekKey(dt){
+  // Map any date to the upcoming Friday (UTC)
+  const x = new Date(dt);
+  const wd = x.getUTCDay(); // 0=Sun ... 5=Fri 6=Sat
+  const offset = (5 - wd + 7) % 7; // Sat->6, Sun->5, Fri->0, etc.
+  x.setUTCDate(x.getUTCDate() + offset);
+  x.setUTCHours(0,0,0,0);
+  return x.toISOString().slice(0,10);
+}
+
+function lambdaFromHalfLife(H){
+  return Math.pow(0.5, 1/Math.max(1, H));
+}
+
+function ewma(arr, lambda){
+  let s=null; const out={};
+  for(const {w,value} of arr){
+    s = (s==null) ? value : (lambda*s + (1-lambda)*value);
+    out[w] = s;
+  }
+  return out;
 }
 
 async function buildHeatmap(url){
@@ -192,7 +242,7 @@ async function buildHeatmap(url){
     for(const k of need){ if(!header.includes(k)) throw new Error('Missing header: '+k); }
     const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
 
-    // Parse per-ticker daily bars
+    // per-ticker daily bars
     const byT = {};
     for(const r of rows){
       const t = (r[idx.ticker]||'').toUpperCase();
@@ -203,17 +253,9 @@ async function buildHeatmap(url){
     }
     for(const t in byT){ byT[t].sort((a,b)=>a.d-b.d); }
 
-    // Week key (Friday end)
-    function weekKey(dt){
-      const x = new Date(dt); const wd = x.getUTCDay();
-      const offset = wd === 6 ? 1: wd === 0 ? 2: 5-wd; // push to Fri
-      x.setUTCDate(x.getUTCDate()+offset); x.setUTCHours(0,0,0,0);
-      return x.toISOString().slice(0,10);
-    }
-
-    // Aggregate to weekly CMF & Return
+    // Aggregate weekly CMF & Return
     const weeks = new Set();
-    const wkByT = {}; // t -> { w -> {cmf, ret} }
+    const wkByT = {};
     for(const t in byT){
       const weekMap = {};
       let prevFriClose = null;
@@ -241,10 +283,12 @@ async function buildHeatmap(url){
       wkByT[t] = weekMap;
     }
 
-    const wkArr = Array.from(weeks).sort().slice(-12); // last 12 weeks
+    // keep only the last LOOKBACK_N weeks
+    const allWeeks = Array.from(weeks).sort();
+    const wkArr = allWeeks.slice(-Math.max(1, LOOKBACK_N));
 
-    // v1 percentiles (CMF only)
-    const pctV1 = {}; // t->{w:pct}
+    // v1 (CMF-only) → cross-section percentiles each week
+    const pctV1 = {};
     for(const w of wkArr){
       const pair = [];
       for(const t in wkByT){ const hit = wkByT[t][w]; if(hit) pair.push([t, hit.cmf]); }
@@ -252,39 +296,10 @@ async function buildHeatmap(url){
       const n = pair.length; pair.forEach((p,i)=>{ (pctV1[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
     }
 
-    // v2 composite: EWMA of CMF & Return → cross-section percentiles → 65/35 combine
-    function ewma(arr, lambda){ let s=null; const out={}; for(const {w,value} of arr){ s=(s==null)?value:(lambda*s+(1-lambda)*value); out[w]=s; } return out; }
-    const LAMBDA = 0.92; // ~7-week half-life
-    const flowEW = {}; const perfEW = {};
-    for(const t in wkByT){
-      const seqF = []; const seqR = [];
-      for(const w of wkArr){ const hit = wkByT[t][w]; if(!hit) continue; seqF.push({w,value:hit.cmf}); seqR.push({w,value:hit.ret}); }
-      flowEW[t] = ewma(seqF, LAMBDA);
-      perfEW[t] = ewma(seqR, LAMBDA);
-    }
-    function xsecPercentiles(mapByTicker){
-      const out = {};
-      for(const w of wkArr){
-        const pair = [];
-        for(const t in mapByTicker){ if(mapByTicker[t][w]!=null) pair.push([t,mapByTicker[t][w]]); }
-        pair.sort((a,b)=>a[1]-b[1]);
-        const n = pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
-      }
-      return out;
-    }
-    const flowPct = xsecPercentiles(flowEW);
-    const perfPct = xsecPercentiles(perfEW);
-    const compPct = {}; // 65% Flow, 35% Perf
-    for(const t in wkByT){
-      for(const w of wkArr){
-        const f=(flowPct[t]||{})[w], p=(perfPct[t]||{})[w];
-        if(f==null||p==null) continue;
-        const v=Math.round(0.65*f + 0.35*p);
-        (compPct[t] ||= {})[w]=v;
-      }
-    }
+    // Composite v2 computed with current HALF_LIFE
+    const compPct = computeCompositePct(wkByT, wkArr, HALF_LIFE);
 
-    // cache + render (no re-fetch for sorting)
+    // cache + render
     window._heat = { wkArr, pctV1, compPct, wkByT };
     render();
     const modeLabel = (mode==='v2'?'Composite (Price+Flow)':'CMF only');
@@ -293,6 +308,45 @@ async function buildHeatmap(url){
     console.error(err);
     alert(err.message || 'Could not load/parse CSV');
   }
+}
+
+// recompute Composite using existing weekly data (no refetch)
+function recomputeComposite(){
+  const H = window._heat; if(!H) return;
+  H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE);
+}
+
+function computeCompositePct(wkByT, wkArr, halfLife){
+  const LAMBDA = lambdaFromHalfLife(halfLife);
+  const flowEW = {}; const perfEW = {};
+  for(const t in wkByT){
+    const seqF = []; const seqR = [];
+    for(const w of wkArr){ const hit = wkByT[t][w]; if(!hit) continue; seqF.push({w,value:hit.cmf}); seqR.push({w,value:hit.ret}); }
+    flowEW[t] = ewma(seqF, LAMBDA);
+    perfEW[t] = ewma(seqR, LAMBDA);
+  }
+  function xsecPercentiles(mapByTicker){
+    const out = {};
+    for(const w of wkArr){
+      const pair = [];
+      for(const t in mapByTicker){ if(mapByTicker[t][w]!=null) pair.push([t,mapByTicker[t][w]]); }
+      pair.sort((a,b)=>a[1]-b[1]);
+      const n = pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
+    }
+    return out;
+  }
+  const flowPct = xsecPercentiles(flowEW);
+  const perfPct = xsecPercentiles(perfEW);
+  const compPct = {};
+  for(const t in wkByT){
+    for(const w of wkArr){
+      const f=(flowPct[t]||{})[w], p=(perfPct[t]||{})[w];
+      if(f==null||p==null) continue;
+      const v=Math.round(0.65*f + 0.35*p);
+      (compPct[t] ||= {})[w]=v;
+    }
+  }
+  return compPct;
 }
 
 // ====== sorting & rendering ======
@@ -312,31 +366,29 @@ function render(){
   const latest = wkArr[wkArr.length-1];
   const sortBy = (sortSel?.value)||'ticker';
 
-  // build sortable rows
   const rows = names.map(t=>{
     const label = (LABELS[active]||{})[t] || '';
     const series = wkArr.map(w => getVal(t,w));
     const latestVal = getVal(t, latest);
-    const avg12 = avg(series);
+    const avgN = avg(series);
     const mom4 = (()=>{
-      const i = wkArr.length-1, j = wkArr.length-5;
-      const a = getVal(t, wkArr[i]), b = j>=0 ? getVal(t, wkArr[j]) : null;
+      const i = wkArr.length-1, j = Math.max(0, wkArr.length-5);
+      const a = getVal(t, wkArr[i]), b = (wkArr.length>4) ? getVal(t, wkArr[j]) : null;
       return (a!=null && b!=null) ? (a-b) : null;
     })();
-    return { t, label, latestVal, avg12, mom4 };
+    return { t, label, latestVal, avgN, mom4 };
   });
 
   rows.sort((A,B)=>{
     switch(sortBy){
       case 'group': return (A.label||'').localeCompare(B.label||'') || A.t.localeCompare(B.t);
       case 'latest': return (B.latestVal??-1) - (A.latestVal??-1) || A.t.localeCompare(B.t);
-      case 'avg12':  return (B.avg12??-1)    - (A.avg12??-1)    || A.t.localeCompare(B.t);
-      case 'mom4':   return (B.mom4??-1)     - (A.mom4??-1)     || A.t.localeCompare(B.t);
-      default:       return A.t.localeCompare(B.t); // ticker
+      case 'avgN':   return (B.avgN??-1)      - (A.avgN??-1)      || A.t.localeCompare(B.t);
+      case 'mom4':   return (B.mom4??-1)      - (A.mom4??-1)      || A.t.localeCompare(B.t);
+      default:       return A.t.localeCompare(B.t);
     }
   });
 
-  // render table
   const th = ['<th>Group</th>','<th>Ticker</th>']
              .concat(H.wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
   let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
@@ -353,7 +405,6 @@ function render(){
   document.getElementById('tableWrap').innerHTML = html;
 }
 
-// Safe startup after DOM is ready
 window.addEventListener('DOMContentLoaded', () => {
   try {
     setActive(active);
