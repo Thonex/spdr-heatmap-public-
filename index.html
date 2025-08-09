@@ -182,15 +182,25 @@ function updateAvgOptionLabel(){
   if (optAvg) optAvg.textContent = `${LOOKBACK_N}‑week avg (desc)`;
 }
 
+
+// Hard-coded CSV sources (one per pill)
+const URLS = {
+  sectors: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRb0KGQYJoXfcLSE9_HUGVV513UrBMn3M5DhtqJHDyXgYLamBBsKQDwo7rR6Lvu-dTvU82ex9nt2igO/pub?gid=0&single=true&output=csv",
+  industries: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv"
+};
+
+
 function setActive(which){
   active = which === 'sectors' ? 'sectors' : 'industries';
   localStorage.setItem('heatmap_active', active);
+
   pillS.classList.toggle('active', active==='sectors');
   pillI.classList.toggle('active', active==='industries');
-  const saved = localStorage.getItem(KEYS[active]) || '';
-  urlInput.value = saved;
+
   modeV1.classList.toggle('active', mode==='v1');
   modeV2.classList.toggle('active', mode==='v2');
+
+  // if we already have data, just re-render for this pill
   if (window._heat) render();
 }
 
@@ -210,11 +220,14 @@ sortSel.onchange = ()=> render();
 function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
 
 async function loadActive(){
-  const url = {
+  const URLS = {
   sectors: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRb0KGQYJoXfcLSE9_HUGVV513UrBMn3M5DhtqJHDyXgYLamBBsKQDwo7rR6Lvu-dTvU82ex9nt2igO/pub?gid=0&single=true&output=csv",
-  industryGroups: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv"
-}[active];
-  if(!url){ alert(`No ${active} URL saved yet. Paste it above and click Save URL.`); return; }
+  industries: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv"
+};
+
+async function loadActive(){
+  const url = URLS[active];
+  if (!url) { alert(`No URL configured for "${active}"`); return; }
   await buildHeatmap(url);
 }
 
