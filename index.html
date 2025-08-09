@@ -71,6 +71,38 @@ if (!localStorage.getItem(KEYS.industries)) {
   localStorage.setItem(KEYS.industries, 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv');
 }
 
+// Label maps so we can show Sector / Sector-Group before the ticker
+const LABELS = {
+  sectors: {
+    XLB: 'Materials', XLE: 'Energy', XLF: 'Financials', XLI: 'Industrials', XLK: 'Information Technology',
+    XLP: 'Consumer Staples', XLU: 'Utilities', XLV: 'Health Care', XLY: 'Consumer Discretionary', XLRE: 'Real Estate', XLC: 'Communication Services'
+  },
+  industries: {
+    // ENERGY
+    XOP: 'Energy – Oil & Gas E&P', OIH: 'Energy – Oil Services', FCG: 'Energy – Natural Gas',
+    // MATERIALS
+    XME: 'Materials – Metals & Mining', XLB: 'Materials – Broad',
+    // INDUSTRIALS
+    ITA: 'Industrials – Aerospace & Defense', IYT: 'Industrials – Transportation', PAVE: 'Industrials – Infrastructure', XLI: 'Industrials – Broad',
+    // CONSUMER DISCRETIONARY
+    ITB: 'Consumer Discretionary – Home Construction', AUTO: 'Consumer Discretionary – Autos/EV (composite)', XRT: 'Consumer Discretionary – Retail', XLY: 'Consumer Discretionary – Broad',
+    // CONSUMER STAPLES
+    XLP: 'Consumer Staples – Broad', VDC: 'Consumer Staples – Broad (Vanguard)',
+    // HEALTH CARE
+    IBB: 'Health Care – Biotechnology', IHI: 'Health Care – Medical Devices', PPH: 'Health Care – Pharmaceuticals', XLV: 'Health Care – Broad',
+    // FINANCIALS
+    KBE: 'Financials – Banks', KRE: 'Financials – Regional Banks', XLF: 'Financials – Broad',
+    // REAL ESTATE
+    XLRE: 'Real Estate – Select Sector REITs', VNQ: 'Real Estate – Broad', IYR: 'Real Estate – Broad (alt)',
+    // INFORMATION TECHNOLOGY
+    SOXX: 'Information Technology – Semiconductors', IGV: 'Information Technology – Software', FDN: 'Information Technology – Internet', CIBR: 'Information Technology – Cybersecurity', XLK: 'Information Technology – Broad',
+    // COMMUNICATION SERVICES
+    XLC: 'Communication Services – Broad', VOX: 'Communication Services – Telecom',
+    // UTILITIES
+    XLU: 'Utilities – Broad', FUTY: 'Utilities – Broad (alt)'
+  }
+};
+
 let active = localStorage.getItem('heatmap_active') || 'industries';
 let mode = localStorage.getItem(MODE_KEY) || 'v2';
 
@@ -95,6 +127,18 @@ function setActive(which){
 pillS.onclick = ()=>{ setActive('sectors'); };
 pillI.onclick = ()=>{ setActive('industries'); };
 modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
+modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
+btnSave.onclick = ()=>{
+  const v = urlInput.value.trim();
+  if(!v){ alert('Paste a published CSV URL first.'); return; }
+  localStorage.setItem(KEYS[active], v);
+  flash(`Saved ${active} URL.`);
+};
+btnRefresh.onclick = ()=> loadActive();
+
+function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
+
+setActive(active); };
 modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
 btnSave.onclick = ()=>{
   const v = urlInput.value.trim();
@@ -207,10 +251,11 @@ async function buildHeatmap(url){
 
     // Render
     const names = Object.keys(wkByT).sort();
-    const th = ['<th>Ticker</th>'].concat(wkArr.map(w=>`<th class=\"cell\">${w.slice(5)}</th>`)).join('');
+    const th = ['<th>Group</th>','<th>Ticker</th>'].concat(wkArr.map(w=>`<th class=\"cell\">${w.slice(5)}</th>`)).join('');
     let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
     for(const t of names){
-      html += `<tr><td>${t}</td>`;
+      const labelMap = LABELS[active] || {}; const label = labelMap[t] || '';
+      html += `<tr><td style=\"text-align:left\">${label}</td><td>${t}</td>`;
       for(const w of wkArr){
         const val = (mode==='v2' ? (compPct[t]||{})[w] : (pctV1[t]||{})[w]);
         const cls = val==null? '' : (val>=80? 'g' : val>=60? 'y' : 'r');
