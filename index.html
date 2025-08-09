@@ -3,276 +3,233 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SPDR Sector Heatmap – 12 Weeks (CMF Percentile)</title>
+  <title>Big Chart v2 — Sector & Industry Heatmap</title>
   <style>
-    :root{
-      --bg: #0b0d11; --card:#12151b; --muted:#9aa3ae; --grid:#1c222b; --green:#1f6f2e; --yellow:#7a6b1a; --red:#6e1f1f;
-      --greenHi:#29a24a; --yellowHi:#b59d1f; --redHi:#b92d2d; --accent:#4aa3ff;
-    }
-    html,body{height:100%; background:var(--bg); color:#e8edf3; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
-    .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
-    h1{font-size:22px; margin:0 0 8px}
-    .sub{color:var(--muted); margin-bottom:16px}
-    .card{background:var(--card); border:1px solid #1e242d; border-radius:14px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    .controls{display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px}
-    .controls label{font-size:12px; color:var(--muted)}
-    select, input[type="text"], button{background:#0f1319; color:#e8edf3; border:1px solid #2a3442; border-radius:10px; padding:8px 10px}
-    button{cursor:pointer}
-    .legend{display:flex; gap:10px; align-items:center; margin-left:auto}
-    .chip{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#cdd6e3}
-    .swatch{width:14px; height:14px; border-radius:4px; border:1px solid rgba(255,255,255,.15)}
-    .grid{overflow:auto; border-radius:12px; border:1px solid #1e242d}
-    table{border-collapse:separate; border-spacing:0; width:100%; min-width:900px}
-    thead th{position:sticky; top:0; background:#121720; z-index:1; color:#cbd5e1; font-weight:600; text-align:center}
-    th, td{padding:8px 10px; border-bottom:1px solid var(--grid); border-right:1px solid var(--grid)}
-    th:first-child, td:first-child{position:sticky; left:0; background:linear-gradient(90deg,#131822, #12151b); z-index:2}
-    th:first-child{z-index:3}
-    tbody tr:last-child td{border-bottom:none}
-    tbody td.value{font-variant-numeric:tabular-nums; text-align:center; font-weight:600}
-    .ticker{white-space:nowrap; font-weight:700}
-    .sector{color:var(--muted); font-weight:500}
-    .cell{border-radius:8px; padding:6px 8px}
-    .c-green{background:linear-gradient(180deg, rgba(41,162,74,.25), rgba(31,111,46,.3)); color:#dff6e6; border:1px solid rgba(41,162,74,.35)}
-    .c-yellow{background:linear-gradient(180deg, rgba(181,157,31,.25), rgba(122,107,26,.3)); color:#fff6d6; border:1px solid rgba(181,157,31,.35)}
-    .c-red{background:linear-gradient(180deg, rgba(185,45,45,.25), rgba(110,31,31,.3)); color:#ffe0e0; border:1px solid rgba(185,45,45,.35)}
-    .note{color:#aab4c2; font-size:12px; margin-top:10px}
-    .foot{color:#93a1b3; font-size:12px; margin-top:14px}
-    .link{color:var(--accent); text-decoration:none}
+    :root { --bg:#0b0f14; --panel:#111823; --text:#e6edf3; --muted:#9fb0c3; --accent:#3aa3ff; }
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--panel);position:sticky;top:0;z-index:2}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    input[type=url]{min-width:420px;max-width:58vw;padding:8px 10px;border-radius:10px;border:1px solid #2b3a4c;background:#0e141b;color:var(--text)}
+    button, .pill{cursor:pointer;border:1px solid #2b3a4c;background:#0e141b;color:var(--text);padding:8px 12px;border-radius:999px}
+    .pill.active{background:var(--accent);border-color:var(--accent);color:#06121e;font-weight:600}
+    .toggle{display:flex;gap:6px;align-items:center;padding:4px;border-radius:999px;background:#0e141b;border:1px solid #2b3a4c}
+    .toggle button{border:none;padding:6px 10px;border-radius:999px}
+    .toggle button.active{background:var(--accent);color:#06121e;font-weight:600}
+    .muted{color:var(--muted)}
+    main{padding:16px}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
+    th{position:sticky;top:58px;background:#0f1722;z-index:1}
+    .cell{min-width:38px}
+    .g{background:#0f3;color:#061}
+    .y{background:#dd0;color:#3b2}
+    .r{background:#b22;color:#fee}
+    .legend{display:flex;gap:8px;align-items:center}
+    .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
+    .box.g{background:#0f3}.box.y{background:#dd0}.box.r{background:#b22}
+    .note{margin-top:6px}
+    .small{font-size:12px}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>SPDR Sector Heatmap – Last 12 Weeks</h1>
-    <div class="sub">Cells show <strong>weekly money-flow percentile</strong> (0–100) by sector ETF. Colors: <strong>green ≥ 75</strong>, <strong>yellow 50–74</strong>, <strong>red &lt; 50</strong>.
-      <br/>Model: <em>Chaikin Money Flow (CMF)</em> as a proxy for fund <em>inflows/outflows</em>, computed weekly; then ranked across sectors per week.
-    </div>
-
-    <div class="card">
-      <div class="controls">
-        <label>Sort rows by:
-          <select id="sortBy">
-            <option value="ticker">Ticker</option>
-            <option value="sector">Sector</option>
-            <option value="latest">Latest Week Percentile</option>
-            <option value="avg">12-Week Average Percentile</option>
-          </select>
-        </label>
-        <label>CSV URL (optional): <input type="text" id="csvUrl" placeholder="Paste published CSV from Google Sheets" size="44" /></label>
-        <button id="loadCsv">Load CSV</button>
-        <div class="legend">
-          <span class="chip"><span class="swatch" style="background:var(--redHi)"></span> &lt; 50</span>
-          <span class="chip"><span class="swatch" style="background:var(--yellowHi)"></span> 50–74</span>
-          <span class="chip"><span class="swatch" style="background:var(--greenHi)"></span> ≥ 75</span>
-        </div>
+  <header>
+    <div class="row">
+      <span class="pill" id="pillSectors">Sectors</span>
+      <span class="pill" id="pillIndustries">Industry Groups</span>
+      <div class="toggle" title="Calculation engine">
+        <button id="modeV1">CMF only</button>
+        <button id="modeV2">Composite (Price+Flow)</button>
       </div>
-
-      <div class="grid">
-        <table id="heat"></table>
-      </div>
-      <div class="note">
-        <strong>How to feed live data:</strong> Publish a Google Sheet with columns <code>date,ticker,open,high,low,close,volume</code> for the 11 sector SPDRs (XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY, XLRE, XLC). Use daily rows covering at least the last 13 weeks. Click <em>File → Share → Publish to web</em> and choose <em>CSV link</em>. Paste the URL above and click <em>Load CSV</em>. This page will aggregate to weekly, compute CMF per week, then percentile-rank across sectors.
+      <button id="btnRefresh">Refresh</button>
+      <div class="legend small">
+        <span class="box g"></span> 80–99
+        <span class="box y"></span> 60–79
+        <span class="box r"></span> 0–59
       </div>
     </div>
-
-    <div class="foot">Sectors are the 11 GICS sectors via SPDR ETFs: XLB (Materials), XLE (Energy), XLF (Financials), XLI (Industrials), XLK (Info Tech), XLP (Consumer Staples), XLU (Utilities), XLV (Health Care), XLY (Consumer Discretionary), XLRE (Real Estate), XLC (Communication Services).
+    <div class="row">
+      <label class="muted small">Active CSV URL</label>
+      <input id="csvUrl" type="url" placeholder="Paste published CSV URL (output=csv)" />
+      <button id="btnSaveUrl">Save URL</button>
     </div>
-  </div>
+  </header>
+
+  <main>
+    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage). Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
+    </div>
+    <div id="status" class="small muted" style="margin:8px 0 14px"></div>
+    <div id="tableWrap"></div>
+  </main>
 
 <script>
-// -------------------- CONFIG --------------------
-const SECTORS = [
-  { ticker: 'XLB', name: 'Materials' },
-  { ticker: 'XLE', name: 'Energy' },
-  { ticker: 'XLF', name: 'Financials' },
-  { ticker: 'XLI', name: 'Industrials' },
-  { ticker: 'XLK', name: 'Information Technology' },
-  { ticker: 'XLP', name: 'Consumer Staples' },
-  { ticker: 'XLU', name: 'Utilities' },
-  { ticker: 'XLV', name: 'Health Care' },
-  { ticker: 'XLY', name: 'Consumer Discretionary' },
-  { ticker: 'XLRE', name: 'Real Estate' },
-  { ticker: 'XLC', name: 'Communication Services' }
-];
+// ====== dataset storage ======
+const KEYS = { sectors: 'heatmap_url_sectors', industries: 'heatmap_url_industries' };
+const MODE_KEY = 'heatmap_mode'; // 'v1' or 'v2'
 
-// Demo fallback data: 12 weeks of random percentiles for layout preview.
-// Replace by loading CSV to compute from OHLCV.
-const demoWeeks = (() => {
-  const today = new Date();
-  const weeks = [];
-  for (let i=11; i>=0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i*7);
-    // set to Friday (week ending) for labeling
-    const wd = d.getDay();
-    const diffToFri = (5 - wd + 7) % 7; // 5=Fri
-    d.setDate(d.getDate() + diffToFri);
-    weeks.push(d.toISOString().slice(0,10));
-  }
-  return weeks;
-})();
-
-let data = SECTORS.map(s => ({
-  ticker: s.ticker,
-  sector: s.name,
-  values: demoWeeks.map(_ => Math.round( (Math.random()*60) + 20 )) // 20–80 for demo
-}));
-
-// -------------------- CSV → CMF Pipeline --------------------
-// Expected CSV columns: date,ticker,open,high,low,close,volume
-// Multiple tickers interleaved by date.
-async function loadCSV(url){
-  // If running from file://, route through a permissive CORS proxy
-  const needsProxy = location.protocol === 'file:';
-  const proxied = needsProxy ? 'https://cors.isomorphic-git.org/' + url : url;
-
-  const res = await fetch(proxied);
-  if(!res.ok) throw new Error('Failed to fetch CSV: ' + res.status);
-
-  // Read and strip any UTF-8 BOM from start
-  const text = await res.text();
-  const clean = text.replace(/^\uFEFF/, '');
-
-  const rows = clean.trim().split(/\r?\n/).map(r => r.split(','));
-  const header = rows.shift().map(h => h.replace(/\uFEFF/g,'').trim().toLowerCase());
-  const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
-  const byTicker = {};
-  for(const r of rows){
-    const t = r[idx.ticker];
-    if(!SECTORS.find(s=>s.ticker===t)) continue; // ignore non-sector tickers
-    const rec = {
-      date: new Date(r[idx.date]),
-      open: parseFloat(r[idx.open]),
-      high: parseFloat(r[idx.high]),
-      low: parseFloat(r[idx.low]),
-      close: parseFloat(r[idx.close]),
-      volume: parseFloat(r[idx.volume])
-    };
-    if(!byTicker[t]) byTicker[t] = [];
-    if(Number.isFinite(rec.close) && Number.isFinite(rec.high) && Number.isFinite(rec.low) && Number.isFinite(rec.volume)){
-      byTicker[t].push(rec);
-    }
-  }
-  // sort by date
-  Object.values(byTicker).forEach(arr => arr.sort((a,b)=>a.date-b.date));
-
-  // Helper: get week-ending label (Friday)
-  const weekKey = (d)=>{
-    const dt = new Date(d);
-    const wd = dt.getDay();
-    const diffToFri = (5 - wd + 7) % 7;
-    dt.setDate(dt.getDate() + diffToFri);
-    return dt.toISOString().slice(0,10);
-  };
-
-  // Compute daily Money Flow Multiplier (MFM), Money Flow Volume (MFV)
-  // CMF over a week: sum(MFV) / sum(Volume) for that week
-  const weeklyCMF = {}; // { ticker: { week: cmf } }
-  for(const t of Object.keys(byTicker)){
-    const days = byTicker[t];
-    const buckets = {};
-    for(const d of days){
-      const range = d.high - d.low;
-      if(range <= 0) continue;
-      const mfm = ((d.close - d.low) - (d.high - d.close)) / range; // [-1,1]
-      const mfv = mfm * d.volume;
-      const wk = weekKey(d.date);
-      if(!buckets[wk]) buckets[wk] = { mfv:0, vol:0 };
-      buckets[wk].mfv += mfv;
-      buckets[wk].vol += d.volume;
-    }
-    weeklyCMF[t] = Object.fromEntries(Object.entries(buckets).map(([wk,v])=>[wk, v.vol>0 ? v.mfv / v.vol : 0]));
-  }
-
-  // Determine the 12 most recent weeks across all tickers
-  const allWeeks = new Set();
-  Object.values(weeklyCMF).forEach(obj=>Object.keys(obj).forEach(w=>allWeeks.add(w)));
-  const weekList = Array.from(allWeeks).sort().slice(-12);
-
-  // For each week, compute percentile ranks across sectors (0–100)
-  const valuesByWeek = {}; // { week: {ticker: pct} }
-  for(const wk of weekList){
-    const arr = SECTORS.map(s => ({
-      ticker: s.ticker,
-      val: (weeklyCMF[s.ticker] && Number.isFinite(weeklyCMF[s.ticker][wk])) ? weeklyCMF[s.ticker][wk] : NaN
-    }));
-    const valid = arr.filter(o=>!isNaN(o.val));
-    const sorted = [...valid].sort((a,b)=>a.val-b.val);
-    const pctMap = new Map();
-    sorted.forEach((o,i)=>{
-      const pct = Math.round( (i/(sorted.length-1||1)) * 100 );
-      pctMap.set(o.ticker, pct);
-    });
-    valuesByWeek[wk] = Object.fromEntries(SECTORS.map(s=>[s.ticker, pctMap.get(s.ticker) ?? 0]));
-  }
-
-  // Build final data array in the same shape as demo
-  data = SECTORS.map(s=>({
-    ticker: s.ticker,
-    sector: s.name,
-    values: weekList.map(wk=> valuesByWeek[wk][s.ticker])
-  }));
-  weeks = weekList;
+// Pre-fill Industry Groups with the URL you provided earlier
+if (!localStorage.getItem(KEYS.industries)) {
+  localStorage.setItem(KEYS.industries, 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv');
 }
 
-let weeks = demoWeeks.slice();
+let active = localStorage.getItem('heatmap_active') || 'industries';
+let mode = localStorage.getItem(MODE_KEY) || 'v2';
 
-function colorClass(v){
-  if(v>=75) return 'c-green';
-  if(v>=50) return 'c-yellow';
-  return 'c-red';
+const pillS = document.getElementById('pillSectors');
+const pillI = document.getElementById('pillIndustries');
+const modeV1 = document.getElementById('modeV1');
+const modeV2 = document.getElementById('modeV2');
+const urlInput = document.getElementById('csvUrl');
+const btnSave = document.getElementById('btnSaveUrl');
+const btnRefresh = document.getElementById('btnRefresh');
+const statusEl = document.getElementById('status');
+
+function setActive(which){
+  active = which; localStorage.setItem('heatmap_active', which);
+  pillS.classList.toggle('active', which==='sectors');
+  pillI.classList.toggle('active', which==='industries');
+  urlInput.value = localStorage.getItem(KEYS[which]) || '';
+  modeV1.classList.toggle('active', mode==='v1');
+  modeV2.classList.toggle('active', mode==='v2');
 }
 
-function render(){
-  const sortBy = document.getElementById('sortBy').value;
-  const t = document.getElementById('heat');
-  const thead = [
-    '<thead><tr>',
-    '<th style="min-width:160px; text-align:left">Ticker / Sector</th>',
-    ...weeks.map(w=>`<th>${w}</th>`),
-    '<th>Avg</th>',
-    '</tr></thead>'
-  ].join('');
+pillS.onclick = ()=>{ setActive('sectors'); };
+pillI.onclick = ()=>{ setActive('industries'); };
+modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
+modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); };
+btnSave.onclick = ()=>{
+  const v = urlInput.value.trim();
+  if(!v){ alert('Paste a published CSV URL first.'); return; }
+  localStorage.setItem(KEYS[active], v);
+  flash(`Saved ${active} URL.`);
+};
+btnRefresh.onclick = ()=> loadActive();
 
-  let rows = data.map(r=>{
-    const avg = r.values.reduce((a,b)=>a+b,0) / (r.values.length||1);
-    return {...r, avg: Math.round(avg), latest: r.values[r.values.length-1] };
-  });
+function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
 
-  if(sortBy==='sector') rows.sort((a,b)=>a.sector.localeCompare(b.sector));
-  else if(sortBy==='ticker') rows.sort((a,b)=>a.ticker.localeCompare(b.ticker));
-  else if(sortBy==='latest') rows.sort((a,b)=>b.latest - a.latest);
-  else if(sortBy==='avg') rows.sort((a,b)=>b.avg - a.avg);
+setActive(active);
 
-  const tbody = ['<tbody>'];
-  for(const r of rows){
-    tbody.push('<tr>');
-    tbody.push(`<th class="ticker">${r.ticker}<div class="sector">${r.sector}</div></th>`);
-    for(const v of r.values){
-      tbody.push(`<td class="value"><div class="cell ${colorClass(v)}">${v}</div></td>`);
-    }
-    tbody.push(`<td class="value"><div class="cell ${colorClass(r.avg)}">${r.avg}</div></td>`);
-    tbody.push('</tr>');
-  }
-  tbody.push('</tbody>');
-
-  t.innerHTML = thead + tbody.join('');
+// ====== CSV → weekly CMF (v1) and Composite (v2) ======
+async function loadActive(){
+  const url = localStorage.getItem(KEYS[active]);
+  if(!url){ alert(`No ${active} URL saved yet. Paste it above and click Save URL.`); return; }
+  await buildHeatmap(url);
 }
 
-render();
-
-document.getElementById('sortBy').addEventListener('change', render);
-
-document.getElementById('loadCsv').addEventListener('click', async ()=>{
-  const url = document.getElementById('csvUrl').value.trim();
-  if(!url) return alert('Paste a published CSV URL from Google Sheets first.');
+async function buildHeatmap(url){
   try{
-    await loadCSV(url);
-    render();
+    const needsProxy = location.protocol === 'file:';
+    const proxied = needsProxy ? 'https://cors.isomorphic-git.org/' + url : url;
+    const res = await fetch(proxied);
+    if(!res.ok) throw new Error('Fetch failed: '+res.status);
+    const text = (await res.text()).replace(/^\uFEFF/, '').trim();
+    const rows = text.split(/\r?\n/).map(r=>r.split(','));
+    const header = rows.shift().map(h=>h.replace(/\uFEFF/g,'').trim().toLowerCase());
+    const need = ['date','ticker','open','high','low','close','volume'];
+    for(const k of need){ if(!header.includes(k)) throw new Error('Missing header: '+k); }
+    const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
+
+    // Parse per-ticker daily bars
+    const byT = {};
+    for(const r of rows){
+      const t = r[idx.ticker];
+      const d = new Date(r[idx.date]);
+      const o = +r[idx.open], h = +r[idx.high], l = +r[idx.low], c = +r[idx.close], v = +r[idx.volume];
+      if(!t || !isFinite(c) || !isFinite(h) || !isFinite(l) || !isFinite(v) || h<=l) continue;
+      (byT[t] ||= []).push({d,o,h,l,c,v});
+    }
+    for(const t in byT){ byT[t].sort((a,b)=>a.d-b.d); }
+
+    // Week key (Friday end)
+    function weekKey(dt){
+      const x = new Date(dt); const wd = x.getUTCDay();
+      const offset = wd === 6 ? 1: wd === 0 ? 2: 5-wd; // push to Fri
+      x.setUTCDate(x.getUTCDate()+offset); x.setUTCHours(0,0,0,0);
+      return x.toISOString().slice(0,10);
+    }
+
+    // Aggregate to weekly CMF & Return
+    const weeks = new Set();
+    const wkByT = {}; // t -> { w -> {cmf, ret} }
+    for(const t in byT){
+      const weekMap = {};
+      let prevFriClose = null;
+      let acc = {}; let curW = null;
+      for(const bar of byT[t]){
+        const w = weekKey(bar.d);
+        if(curW && w !== curW){
+          const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
+          const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
+          weekMap[curW] = {cmf, ret};
+          prevFriClose = acc.close; acc = {};
+        }
+        curW = w;
+        const mfm = ((bar.c - bar.l) - (bar.h - bar.c)) / (bar.h - bar.l);
+        const mfv = mfm * bar.v;
+        acc.mfv = (acc.mfv||0) + (isFinite(mfv)? mfv: 0);
+        acc.vol = (acc.vol||0) + (isFinite(bar.v)? bar.v: 0);
+        acc.close = bar.c; weeks.add(w);
+      }
+      if(curW){
+        const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
+        const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
+        weekMap[curW] = {cmf, ret};
+      }
+      wkByT[t] = weekMap;
+    }
+
+    const wkArr = Array.from(weeks).sort().slice(-12); // last 12 weeks
+
+    // v1 percentiles (CMF only)
+    const pctV1 = {}; // t->{w:pct}
+    for(const w of wkArr){
+      const pair = [];
+      for(const t in wkByT){ const hit = wkByT[t][w]; if(hit) pair.push([t, hit.cmf]); }
+      pair.sort((a,b)=>a[1]-b[1]);
+      const n = pair.length; pair.forEach((p,i)=>{ (pctV1[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
+    }
+
+    // v2 composite: EWMA of CMF & Return → cross-section percentiles → 65/35 combine
+    function ewma(arr, lambda){ let s=null; const out={}; for(const {w,value} of arr){ s=(s==null)?value:(lambda*s+(1-lambda)*value); out[w]=s; } return out; }
+    const LAMBDA = 0.92; // ~7-week half-life (heavier recent weight)
+    const flowEW = {}; const perfEW = {};
+    for(const t in wkByT){
+      const seqF = []; const seqR = [];
+      for(const w of wkArr){ const hit = wkByT[t][w]; if(!hit) continue; seqF.push({w,value:hit.cmf}); seqR.push({w,value:hit.ret}); }
+      flowEW[t] = ewma(seqF, LAMBDA);
+      perfEW[t] = ewma(seqR, LAMBDA);
+    }
+    function xsecPercentiles(mapByTicker){
+      const out = {}; for(const w of wkArr){ const pair = []; for(const t in mapByTicker){ if(mapByTicker[t][w]!=null) pair.push([t,mapByTicker[t][w]]); } pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; }); } return out; }
+    const flowPct = xsecPercentiles(flowEW);
+    const perfPct = xsecPercentiles(perfEW);
+    const compPct = {}; // 65% Flow, 35% Perf
+    for(const t in wkByT){ for(const w of wkArr){ const f=(flowPct[t]||{})[w]; const p=(perfPct[t]||{})[w]; if(f==null||p==null) continue; const v=Math.round(0.65*f + 0.35*p); (compPct[t] ||= {})[w]=v; } }
+
+    // Render
+    const names = Object.keys(wkByT).sort();
+    const th = ['<th>Ticker</th>'].concat(wkArr.map(w=>`<th class=\"cell\">${w.slice(5)}</th>`)).join('');
+    let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
+    for(const t of names){
+      html += `<tr><td>${t}</td>`;
+      for(const w of wkArr){
+        const val = (mode==='v2' ? (compPct[t]||{})[w] : (pctV1[t]||{})[w]);
+        const cls = val==null? '' : (val>=80? 'g' : val>=60? 'y' : 'r');
+        html += `<td class=\"cell ${cls}\">${val??''}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    document.getElementById('tableWrap').innerHTML = html;
+    const modeLabel = (mode==='v2'?'Composite (Price+Flow)':'CMF only');
+    flash(`Loaded ${names.length} tickers • ${wkArr.length} weeks from ${active} • Mode: ${modeLabel}.`);
   }catch(err){
     console.error(err);
-    alert('Could not load/parse CSV. Ensure headers are: date,ticker,open,high,low,close,volume');
+    alert(err.message || 'Could not load/parse CSV');
   }
-});
+}
+
+// Auto-load
+loadActive();
 </script>
 </body>
 </html>
