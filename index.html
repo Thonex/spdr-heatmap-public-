@@ -247,7 +247,7 @@ async function buildHeatmap(url){
       wkByT[t] = weekMap;
     }
 
-    const allWeeks = Array.from(weeks).sort().reverse();
+    const allWeeks = Array.from(weeks).sort();
     const wkArr = allWeeks.slice(-Math.max(1, LOOKBACK_N));
 
     // v1 (CMF-only)
