@@ -18,11 +18,15 @@
     .muted{color:var(--muted)}
     main{padding:16px}
     table{border-collapse:collapse;width:100%}
-    th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
-    th{position:sticky;top:58px;background:#0f1722;z-index:1}
-    .cell{min-width:26px;padding:4px 6px}
-    .g{background:#0f3;color:#061}
-    .y{background:#ffea5a !important;color:#111 !important}
+th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
+th{position:sticky;top:58px;background:#0f1722;z-index:1}
+
+/* final, authoritative rules */
+.cell{ min-width:18px; padding:4px 6px; }   /* narrower cells */
+.g{ background:#0f3; color:#061; }
+/* yellow with dark text – keep only this one */
+.y{ background:#ffea5a !important; color:#000 !important; }
+.r{ background:#b22; color:#fee; }
     .r{background:#b22;color:#fee}
     .legend{display:flex;gap:8px;align-items:center}
     .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
