@@ -6,11 +6,11 @@
   <title>Big Chart v2 — Sector & Industry Heatmap</title>
   <style>
     :root { --bg:#0b0f14; --panel:#111823; --text:#e6edf3; --muted:#9fb0c3; --accent:#3aa3ff; }
-    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial}
     header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--panel);position:sticky;top:0;z-index:2}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     input[type=url]{min-width:420px;max-width:58vw;padding:8px 10px;border-radius:10px;border:1px solid #2b3a4c;background:#0e141b;color:var(--text)}
-    button, .pill{cursor:pointer;border:1px solid #2b3a4c;background:#0e141b;color:var(--text);padding:8px 12px;border-radius:999px}
+    button,.pill{cursor:pointer;border:1px solid #2b3a4c;background:#0e141b;color:var(--text);padding:8px 12px;border-radius:999px}
     .pill.active{background:var(--accent);border-color:var(--accent);color:#06121e;font-weight:600}
     .toggle{display:flex;gap:6px;align-items:center;padding:4px;border-radius:999px;background:#0e141b;border:1px solid #2b3a4c}
     .toggle button{border:none;padding:6px 10px;border-radius:999px}
@@ -20,19 +20,20 @@
     table{border-collapse:collapse;width:100%}
     th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
     th{position:sticky;top:58px;background:#0f1722;z-index:1}
-    /* ~30% narrower value cells */
+    /* ~30% narrower number cells */
     .cell{min-width:26px;padding:4px 6px}
     .g{background:#0f3;color:#061}
-    .y{background:#ffea5a !important;color:#111 !important} /* yellow w/ dark text */
+    .y{background:#ffea5a !important;color:#111 !important} /* yellow with dark text */
     .r{background:#b22;color:#fee}
     .legend{display:flex;gap:8px;align-items:center}
     .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
     .box.g{background:#0f3}.box.y{background:#ffea5a}.box.r{background:#b22}
     .note{margin-top:6px}
     .small{font-size:12px}
+    /* clamp Group column + label */
     td.label{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;min-width:160px}
-    /* clamp Group column width */
-    th:first-child, td:first-child{max-width:200px;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    th:first-child,td:first-child{max-width:200px;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    /* sort dropdown */
     select{background:#0e141b;color:var(--text);border:1px solid #2b3a4c;border-radius:8px;padding:6px 8px}
   </style>
 </head>
@@ -41,10 +42,12 @@
     <div class="row">
       <span class="pill" id="pillSectors">Sectors</span>
       <span class="pill" id="pillIndustries">Industry Groups</span>
+
       <div class="toggle" title="Calculation engine">
         <button id="modeV1">CMF only</button>
         <button id="modeV2">Composite (Price+Flow)</button>
       </div>
+
       <div class="row">
         <label class="muted small">Sort by</label>
         <select id="sortBy" title="Sorting">
@@ -55,13 +58,16 @@
           <option value="mom4">4‑week momentum (desc)</option>
         </select>
       </div>
+
       <button id="btnRefresh">Refresh</button>
+
       <div class="legend small">
         <span class="box g"></span> 80–99
         <span class="box y"></span> 60–79
         <span class="box r"></span> 0–59
       </div>
     </div>
+
     <div class="row">
       <label class="muted small">Active CSV URL</label>
       <input id="csvUrl" type="url" placeholder="Paste published CSV URL (output=csv)" />
@@ -70,7 +76,10 @@
   </header>
 
   <main>
-    <div class="note muted small">Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage) <b>per pill</b>. Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.</div>
+    <div class="note muted small">
+      Tip: paste each dataset URL once and click <b>Save URL</b>. They’re stored in your browser (localStorage) <b>per pill</b>.
+      Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
+    </div>
     <div id="status" class="small muted" style="margin:8px 0 14px"></div>
     <div id="tableWrap"></div>
   </main>
@@ -88,32 +97,33 @@ if (!localStorage.getItem(KEYS.industries)) {
 // Label maps so we can show Sector / Sector–Group before the ticker
 const LABELS = {
   sectors: {
-    XLB: 'Materials', XLE: 'Energy', XLF: 'Financials', XLI: 'Industrials', XLK: 'Information Technology',
-    XLP: 'Consumer Staples', XLU: 'Utilities', XLV: 'Health Care', XLY: 'Consumer Discretionary', XLRE: 'Real Estate', XLC: 'Communication Services'
+    XLB:'Materials', XLE:'Energy', XLF:'Financials', XLI:'Industrials', XLK:'Information Technology',
+    XLP:'Consumer Staples', XLU:'Utilities', XLV:'Health Care', XLY:'Consumer Discretionary',
+    XLRE:'Real Estate', XLC:'Communication Services'
   },
   industries: {
     // ENERGY
-    XOP: 'Energy – Oil & Gas E&P', OIH: 'Energy – Oil Services', FCG: 'Energy – Natural Gas',
+    XOP:'Energy – Oil & Gas E&P', OIH:'Energy – Oil Services', FCG:'Energy – Natural Gas',
     // MATERIALS
-    XME: 'Materials – Metals & Mining', XLB: 'Materials – Broad',
+    XME:'Materials – Metals & Mining', XLB:'Materials – Broad',
     // INDUSTRIALS
-    ITA: 'Industrials – Aerospace & Defense', IYT: 'Industrials – Transportation', PAVE: 'Industrials – Infrastructure', XLI: 'Industrials – Broad',
+    ITA:'Industrials – Aerospace & Defense', IYT:'Industrials – Transportation', PAVE:'Industrials – Infrastructure', XLI:'Industrials – Broad',
     // CONSUMER DISCRETIONARY
-    ITB: 'Consumer Discretionary – Home Construction', AUTO: 'Consumer Discretionary – Autos/EV (composite)', XRT: 'Consumer Discretionary – Retail', XLY: 'Consumer Discretionary – Broad',
+    ITB:'Consumer Discretionary – Home Construction', AUTO:'Consumer Discretionary – Autos/EV (composite)', XRT:'Consumer Discretionary – Retail', XLY:'Consumer Discretionary – Broad',
     // CONSUMER STAPLES
-    XLP: 'Consumer Staples – Broad', VDC: 'Consumer Staples – Broad (Vanguard)',
+    XLP:'Consumer Staples – Broad', VDC:'Consumer Staples – Broad (Vanguard)',
     // HEALTH CARE
-    IBB: 'Health Care – Biotechnology', IHI: 'Health Care – Medical Devices', PPH: 'Health Care – Pharmaceuticals', XLV: 'Health Care – Broad',
+    IBB:'Health Care – Biotechnology', IHI:'Health Care – Medical Devices', PPH:'Health Care – Pharmaceuticals', XLV:'Health Care – Broad',
     // FINANCIALS
-    KBE: 'Financials – Banks', KRE: 'Financials – Regional Banks', XLF: 'Financials – Broad',
+    KBE:'Financials – Banks', KRE:'Financials – Regional Banks', XLF:'Financials – Broad',
     // REAL ESTATE
-    XLRE: 'Real Estate – Select Sector REITs', VNQ: 'Real Estate – Broad', IYR: 'Real Estate – Broad (alt)',
+    XLRE:'Real Estate – Select Sector REITs', VNQ:'Real Estate – Broad', IYR:'Real Estate – Broad (alt)',
     // INFORMATION TECHNOLOGY
-    SOXX: 'Information Technology – Semiconductors', IGV: 'Information Technology – Software', FDN: 'Information Technology – Internet', CIBR: 'Information Technology – Cybersecurity', XLK: 'Information Technology – Broad',
+    SOXX:'Information Technology – Semiconductors', IGV:'Information Technology – Software', FDN:'Information Technology – Internet', CIBR:'Information Technology – Cybersecurity', XLK:'Information Technology – Broad',
     // COMMUNICATION SERVICES
-    XLC: 'Communication Services – Broad', VOX: 'Communication Services – Telecom',
+    XLC:'Communication Services – Broad', VOX:'Communication Services – Telecom',
     // UTILITIES
-    XLU: 'Utilities – Broad', FUTY: 'Utilities – Broad (alt)'
+    XLU:'Utilities – Broad', FUTY:'Utilities – Broad (alt)'
   }
 };
 
@@ -143,7 +153,7 @@ function setActive(which){
     modeV1.classList.toggle('active', mode==='v1');
     modeV2.classList.toggle('active', mode==='v2');
   }
-  // If we already have data cached, just re-render for this pill
+  // If we already have data, just re-render for this pill
   if (window._heat) render();
 }
 
@@ -253,13 +263,28 @@ async function buildHeatmap(url){
       perfEW[t] = ewma(seqR, LAMBDA);
     }
     function xsecPercentiles(mapByTicker){
-      const out = {}; for(const w of wkArr){ const pair = []; for(const t in mapByTicker){ if(mapByTicker[t][w]!=null) pair.push([t,mapByTicker[t][w]]); } pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; }); } return out; }
+      const out = {};
+      for(const w of wkArr){
+        const pair = [];
+        for(const t in mapByTicker){ if(mapByTicker[t][w]!=null) pair.push([t,mapByTicker[t][w]]); }
+        pair.sort((a,b)=>a[1]-b[1]);
+        const n = pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
+      }
+      return out;
+    }
     const flowPct = xsecPercentiles(flowEW);
     const perfPct = xsecPercentiles(perfEW);
     const compPct = {}; // 65% Flow, 35% Perf
-    for(const t in wkByT){ for(const w of wkArr){ const f=(flowPct[t]||{})[w]; const p=(perfPct[t]||{})[w]; if(f==null||p==null) continue; const v=Math.round(0.65*f + 0.35*p); (compPct[t] ||= {})[w]=v; } }
+    for(const t in wkByT){
+      for(const w of wkArr){
+        const f=(flowPct[t]||{})[w], p=(perfPct[t]||{})[w];
+        if(f==null||p==null) continue;
+        const v=Math.round(0.65*f + 0.35*p);
+        (compPct[t] ||= {})[w]=v;
+      }
+    }
 
-    // cache and render
+    // cache + render (no re-fetch for sorting)
     window._heat = { wkArr, pctV1, compPct, wkByT };
     render();
     const modeLabel = (mode==='v2'?'Composite (Price+Flow)':'CMF only');
@@ -270,16 +295,19 @@ async function buildHeatmap(url){
   }
 }
 
-// helpers for sorting/rendering
+// ====== sorting & rendering ======
 function getVal(t,w){
   const H = window._heat; if(!H) return null;
   return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w];
 }
-function avg(arr){ const f=arr.filter(v=>v!=null); return f.length? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null; }
+function avg(arr){
+  const f = arr.filter(v=>v!=null);
+  return f.length ? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null;
+}
 
 function render(){
   const H = window._heat; if(!H) return;
-  const { wkArr, pctV1, compPct, wkByT } = H;
+  const { wkArr, wkByT } = H;
   const names = Object.keys(wkByT);
   const latest = wkArr[wkArr.length-1];
   const sortBy = (sortSel?.value)||'ticker';
@@ -304,11 +332,13 @@ function render(){
       case 'latest': return (B.latestVal??-1) - (A.latestVal??-1) || A.t.localeCompare(B.t);
       case 'avg12':  return (B.avg12??-1)    - (A.avg12??-1)    || A.t.localeCompare(B.t);
       case 'mom4':   return (B.mom4??-1)     - (A.mom4??-1)     || A.t.localeCompare(B.t);
-      default:       return A.t.localeCompare(B.t);
+      default:       return A.t.localeCompare(B.t); // ticker
     }
   });
 
-  const th = ['<th>Group</th>','<th>Ticker</th>'].concat(wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
+  // render table
+  const th = ['<th>Group</th>','<th>Ticker</th>']
+             .concat(H.wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
   let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
   for(const R of rows){
     html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`;
