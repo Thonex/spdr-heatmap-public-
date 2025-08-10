@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Big Chart v22D — Sector & Industry Heatmap (Prev‑Week + WTD, Price‑EWMA Fix)</title>
+  <title>Big Chart v22E — Sector & Industry Heatmap (Percentile‑then‑Blend)</title>
   <style>
     :root { --bg:#0b0f14; --panel:#111823; --text:#e6edf3; --muted:#9fb0c3; --accent:#3aa3ff; }
     body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -42,8 +42,8 @@
        - Dataset pills (Sectors / Industry Groups)
        - Mode: CMF-only vs Composite (Price+Flow)
        - Sort, Lookback (weeks), EWMA half-life (weeks)
-       NOTE: All historical columns use PREVIOUS‑WEEK methodology.
-             WTD is a separate snapshot column that never affects sorting.
+       NOTE: Historical columns are PREVIOUS‑WEEK basis. WTD is a muted
+             snapshot and does not affect ordering or historical values.
   -->
   <header>
     <div class="row">
@@ -98,39 +98,42 @@
 
 <script>
 /* ========================================================================
-   Big Chart v22D — Top‑Analyst Rotation Methodology (documented)
+   Big Chart v22E — Percentile‑then‑Blend Composite
    ------------------------------------------------------------------------
-   Historical columns (previous Friday basis):
-     1) Aggregate daily OHLCV → weekly buckets ending Friday (UTC).
-     2) Flow leg (CMF*):
-        - Daily MFM = ((C−L) − (H−C)) / (H−L); capped to [-1, +1].
-        - Daily MFV = MFM × Volume. Skip zero/NaN volume.
-        - Weekly sums per ticker: Σ MFV, Σ Vol, and close.
-        - Smooth with λ from half‑life H: Flow_t = EWMA(ΣMFV)/EWMA(ΣVol).
-     3) Price leg (**patched**): EWMA of weekly log-return r_t = ln(C_t / C_{t−1}).
-     4) Cross‑section percentiles per week for each leg.
-     5) Blend in percentile space: 65% Flow + 35% Price.
-     6) Re‑percentile the blended scores per week → Composite percentile (0..100).
-
-   WTD column (current unclosed week):
-     - Build partial ΣMFV, ΣVol, and today’s close vs last Friday’s close.
-     - Apply ONE provisional EWMA update to last week’s EWMA states to get Flow_WTD.
-     - Price_WTD = ln(C_today / C_prevFri).
-     - Cross‑section percentile both legs (current week only), blend 65/35,
-       re‑percentile → one 0..100 snapshot.
-     - If no bars yet (weekend/holiday) → show "–".
+   Historical weekly pipeline (previous Friday close):
+     1) Aggregate daily OHLCV → weekly buckets (UTC Fri).
+     2) Flow leg:
+        - Daily MFM = ((C−L) − (H−C)) / (H−L), winsorized to [-1,+1].
+        - Daily MFV = MFM × Volume (skip zero/NaN volume).
+        - Weekly ΣMFV, ΣVol; smooth via EWMA half-life H:
+          Flow_t = EWMA(ΣMFV)_t / EWMA(ΣVol)_t  (gently clamped to [-1,+1]).
+     3) Price leg:
+        - Weekly log return r_t = ln(C_t / C_{t−1})
+        - Smooth via EWMA with the same half-life H.
+     4) **Cross‑section percentile each week for BOTH legs separately.**
+     5) **Blend in percentile space**: Composite_raw = 0.65*FlowPct + 0.35*PricePct
+     6) Optional: **Re‑percentile** Composite_raw per week to force a full ranking.
+   WTD column:
+     - Provisional one‑step EWMA update with this week’s partial ΣMFV/ΣVol
+       and price ln(C_today / C_prevFri), then percentile‑blend‑repercentile
+       for a single snapshot; “–” if no bars yet.
   =======================================================================*/
 
-/* ---------- Data sources (CSV) ---------- */
+/* ---------------- Config toggles (analyst‑friendly) ---------------- */
+const BLEND_FLOW = 0.65;     // weight of flow leg in composite
+const BLEND_PRICE = 0.35;    // weight of price leg
+const RE_PERCENTILE_AFTER_BLEND = true; // set false to see raw blended percentiles
+
+/* ---------------- Data sources (CSV) ---------------- */
 const DATA_URL = {
   sectors: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRb0KGQYJoXfcLSE9_HUGVV513UrBMn3M5DhtqJHDyXgYLamBBsKQDwo7rR6Lvu-dTvU82ex9nt2igO/pub?gid=0&single=true&output=csv',
   industries: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv'
 };
 
-/* ---------- Persisted prefs ---------- */
+/* ---------------- Persistence keys ---------------- */
 const MODE_KEY='heatmap_mode', N_KEY='heatmap_lookback_weeks', H_KEY='heatmap_half_life';
 
-/* ---------- Labels (first column) ---------- */
+/* ---------------- Labels (first column) ---------------- */
 const LABELS = {
   sectors: { XLB:'Materials', XLE:'Energy', XLF:'Financials', XLI:'Industrials', XLK:'Information Technology', XLP:'Consumer Staples', XLU:'Utilities', XLV:'Health Care', XLY:'Consumer Discretionary', XLRE:'Real Estate', XLC:'Communication Services' },
   industries: {
@@ -148,7 +151,7 @@ const LABELS = {
   }
 };
 
-/* ---------- State & DOM ---------- */
+/* ---------------- State & DOM ---------------- */
 let active = localStorage.getItem('heatmap_active') || 'industries';
 let mode   = localStorage.getItem(MODE_KEY) || 'v2';
 let LOOKBACK_N = +(localStorage.getItem(N_KEY) || 12);
@@ -190,11 +193,8 @@ function setActive(which){
 }
 function flash(msg){ statusEl.textContent=msg; setTimeout(()=>statusEl.textContent='',3000); }
 
-/* ---------- Date/Math helpers ---------- */
-function weekKeyPrev(dt){
-  const x=new Date(dt); const wd=x.getUTCDay(); const back=(wd-5+7)%7; x.setUTCDate(x.getUTCDate()-back); x.setUTCHours(0,0,0,0);
-  return x.toISOString().slice(0,10);
-}
+/* ---------------- Date/Math helpers ---------------- */
+function weekKeyPrev(dt){ const x=new Date(dt); const wd=x.getUTCDay(); const back=(wd-5+7)%7; x.setUTCDate(x.getUTCDate()-back); x.setUTCHours(0,0,0,0); return x.toISOString().slice(0,10); }
 function weekKeyNext(dt){ const x=new Date(dt); const wd=x.getUTCDay(); const fwd=(5-wd+7)%7; x.setUTCDate(x.getUTCDate()+fwd); x.setUTCHours(0,0,0,0); return x.toISOString().slice(0,10); }
 function lambdaFromHalfLife(H){ return Math.pow(0.5, 1/Math.max(1e-9,H)); }
 function clamp(x,lo,hi){ return Math.max(lo,Math.min(hi,x)); }
@@ -203,9 +203,8 @@ function ewma(arr,lambda){ let s=null; const out={}; for(const {w,value} of arr)
 /* ======================================================================
    Data build:
    - Parse CSV → daily bars.
-   - Aggregate into weekly buckets (previous Friday).
-   - Keep weekly MFV/Vol sums and last Friday close (for returns).
-   - Also compute current-week partial sums for WTD.
+   - Aggregate into previous‑Friday weekly buckets.
+   - Build current‑week partials for WTD.
 ====================================================================== */
 async function loadActive(){
   const url=DATA_URL[active]; if(!url){ alert(`No URL configured for ${active}`); return; }
@@ -238,9 +237,9 @@ async function buildHeatmap(url){
     }
     for(const t in byT) byT[t].sort((a,b)=>a.d-b.d);
 
-    // 2) Weekly aggregation (previous Friday) + collect WTD partials
+    // 2) Weekly aggregation + WTD partials
     const weeks=new Set();
-    const wkByT={};   // ticker -> weekKeyPrev -> { cmf, retLog, mfvW, volW, close }
+    const wkByT={};   // ticker -> week -> { cmf, retLog, mfvW, volW, close }
     const wtdByT={};  // ticker -> { hasData, mfvWTD, volWTD, todayClose, prevFriClose }
     const today=new Date();
     const curWeekKey=weekKeyNext(today);
@@ -251,8 +250,7 @@ async function buildHeatmap(url){
       let acc={ mfv:0, vol:0, close:null };
       let curW=null;
 
-      // WTD state
-      let wtd={ hasData:false, mfvWTD:0, volWTD:0, todayClose:null, prevFriClose:null };
+      const wtd={ hasData:false, mfvWTD:0, volWTD:0, todayClose:null, prevFriClose:null };
 
       const finalizeWeek=()=>{
         const cmf= acc.vol>0 ? (acc.mfv/acc.vol) : 0;
@@ -263,12 +261,10 @@ async function buildHeatmap(url){
       };
 
       for(const bar of byT[t]){
-        // Historical bucket (previous Friday)
         const wPrev=weekKeyPrev(bar.d);
         if(curW && wPrev!==curW) finalizeWeek();
         curW=wPrev;
 
-        // Daily MFM (winsorize), MFV accumulation
         let mfm=0;
         if(bar.h!==bar.l){ mfm=((bar.c-bar.l)-(bar.h-bar.c))/(bar.h-bar.l); mfm=clamp(mfm,-1,1); }
         const vol=(Number.isFinite(bar.v)&&bar.v>0) ? bar.v : 0;
@@ -276,22 +272,19 @@ async function buildHeatmap(url){
         acc.close=bar.c;
         weeks.add(wPrev);
 
-        // WTD partials: bars whose weekKeyNext == current week's Friday
         const wNext=weekKeyNext(bar.d);
         if(wNext===curWeekKey){
           wtd.hasData=true;
           if(vol>0){ wtd.mfvWTD += mfm*vol; wtd.volWTD += vol; }
           wtd.todayClose = bar.c;
         }
-        // track last completed Friday close for WTD base
         if(wPrev!==curWeekKey) wtd.prevFriClose = prevFriClose;
       }
       if(curW) finalizeWeek();
-      wkByT[t]=weekMap;
-      wtdByT[t]=wtd;
+      wkByT[t]=weekMap; wtdByT[t]=wtd;
     }
 
-    // 3) Historical weeks (last N completed)
+    // 3) Historical windows (last N completed weeks)
     const allWeeks=Array.from(weeks).sort();
     const wkArr=allWeeks.slice(-Math.max(1,LOOKBACK_N));
 
@@ -321,9 +314,11 @@ async function buildHeatmap(url){
 }
 
 /* ======================================================================
-   Composite (historical weeks): ratio-of-EWMAs (flow) + EWMA(log-return)
-   (price) → per-week percentiles → 65/35 blend → re‑percentile.
-   >>> PRICE LEG PATCHED HERE: price leg is now EWMA-smoothed <<<
+   Composite (historical weeks):
+   - Flow: ratio‑of‑EWMAs (bounded) → x‑sec percentile.
+   - Price: EWMA of weekly log‑returns → x‑sec percentile.
+   - **Blend in percentile space** (65/35).
+   - Optional **re‑percentile** the blended scores per week.
 ====================================================================== */
 function recomputeComposite(){
   const H=window._heat; if(!H) return;
@@ -334,7 +329,7 @@ function computeCompositePct(wkByT, wkArr, halfLife){
   const isFin=(x)=>Number.isFinite(x);
 
   // ---- Flow: EWMA(MFV)/EWMA(Vol), gently bounded to [-1, +1] ----
-  const flowMap={};
+  const flowEW={};
   for(const t in wkByT){
     let sMFV=null, sVOL=null; const series={}; const fallback=[];
     for(const w of wkArr){
@@ -342,27 +337,26 @@ function computeCompositePct(wkByT, wkArr, halfLife){
       if(isFin(hit.mfvW)&&isFin(hit.volW)){
         sMFV=(sMFV==null)?hit.mfvW:(λ*sMFV+(1-λ)*hit.mfvW);
         sVOL=(sVOL==null)?hit.volW:(λ*sVOL+(1-λ)*hit.volW);
-        const ratio = (sVOL && sVOL>0) ? (sMFV/sVOL) : null;
-        series[w] = (ratio==null)?null : Math.max(-1, Math.min(1, ratio));
+        const ratio=(sVOL && sVOL>0) ? (sMFV/sVOL) : null;
+        series[w]=(ratio==null)?null:Math.max(-1,Math.min(1,ratio));
       }else if(isFin(hit.cmf)){ fallback.push({w,value:hit.cmf}); }
     }
-    flowMap[t]=Object.keys(series).length?series:ewma(fallback,λ);
+    flowEW[t]=Object.keys(series).length?series:ewma(fallback,λ);
   }
 
-  // ---- PRICE LEG (PATCH): EWMA of weekly log-returns ----
-  const perfMap={};
+  // ---- Price: EWMA of weekly log-returns ----
+  const priceEW={};
   for(const t in wkByT){
     const sR=[];
     for(const w of wkArr){
       const hit=wkByT[t][w]; if(!hit) continue;
-      const r = isFin(hit.retLog) ? hit.retLog
-               : (isFin(hit.ret) ? Math.log(1+hit.ret) : null);
-      if (r != null) sR.push({ w, value: r });
+      const r=isFin(hit.retLog)?hit.retLog:(isFin(hit.ret)?Math.log(1+hit.ret):null);
+      if(r!=null) sR.push({w,value:r});
     }
-    perfMap[t] = ewma(sR, λ); // smooth before cross-sectional ranking
+    priceEW[t]=ewma(sR,λ);
   }
 
-  // ---- Per-week cross-sectional percentiles for each leg ----
+  // ---- Cross-sectional percentiles for each leg (per week) ----
   function xsec(map){
     const out={};
     for(const w of wkArr){
@@ -372,20 +366,29 @@ function computeCompositePct(wkByT, wkArr, halfLife){
     }
     return out;
   }
-  const fPct=xsec(flowMap), pPct=xsec(perfMap);
+  const fPct=xsec(flowEW);
+  const pPct=xsec(priceEW);
 
-  // ---- Blend in percentile space ----
-  const blended={};
-  for(const t in wkByT) for(const w of wkArr){
-    const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w];
-    if(f==null||p==null) continue;
-    (blended[t] ||= {})[w] = 0.65*f + 0.35*p;
+  // ---- Blend IN PERCENTILE SPACE ----
+  const blendedPct={};
+  for(const t in wkByT){
+    for(const w of wkArr){
+      const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w];
+      if(f==null || p==null) continue;
+      (blendedPct[t] ||= {})[w] = BLEND_FLOW*f + BLEND_PRICE*p;
+    }
   }
 
-  // ---- Re‑percentile blended ----
+  // ---- Optional: re‑percentile the blended scores per week ----
+  if (!RE_PERCENTILE_AFTER_BLEND) {
+    // Round to integers to look like percentiles, but keep raw blended ordering.
+    const out={}; for(const t in blendedPct){ out[t]={}; for(const w of wkArr){ const v=blendedPct[t][w]; if(v!=null) out[t][w]=Math.round(v); } }
+    return out;
+  }
+
   const out={};
   for(const w of wkArr){
-    const pair=[]; for(const t in blended){ const v=blended[t][w]; if(v!=null&&isFin(v)) pair.push([t,v]); }
+    const pair=[]; for(const t in blendedPct){ const v=blendedPct[t][w]; if(v!=null && isFin(v)) pair.push([t,v]); }
     pair.sort((a,b)=>a[1]-b[1]); const n=pair.length;
     for(let i=0;i<n;i++) (out[pair[i][0]] ||= {})[w]= n>1 ? Math.round(i*100/(n-1)) : 50;
   }
@@ -393,48 +396,42 @@ function computeCompositePct(wkByT, wkArr, halfLife){
 }
 
 /* ======================================================================
-   WTD (current week) snapshot:
-   - For each ticker:
-     Flow_WTD = last week's EWMA states provisionally updated with this
-                week's partial MFV/Vol (ONE step) → current week value.
-     Price_WTD = ln(todayClose / lastFridayClose).
-   - Cross-sectional percentile (WTD only), blend 65/35, re‑percentile.
-   - Returns: { week: curWeekKey, map: {ticker -> 0..100} }
+   WTD (current week) snapshot — same philosophy:
+   - One-step EWMA update with this week's partials,
+   - Convert both legs to cross‑section percentiles,
+   - Blend 65/35 in percentile space,
+   - Re‑percentile the blend for a clear WTD ranking.
 ====================================================================== */
 function computeWTDPercentile(wkByT, wtdByT, wkArr, halfLife, curWeekKey){
   const λ = lambdaFromHalfLife(halfLife);
   const isFin=(x)=>Number.isFinite(x);
 
-  // 1) Build provisional decayed flow and price for WTD
   const flowNow={}, priceNow={};
   for(const t in wkByT){
-    // roll EWMA states up to the last completed week
-    let sMFV=null, sVOL=null;
+    // roll EWMA states to last completed week
+    let sMFV=null, sVOL=null, lastFriClose=null;
     for(const w of wkArr){
-      const hit=wkByT[t][w]; if(!hit) continue;
-      if(isFin(hit.mfvW) && isFin(hit.volW)){
-        sMFV = (sMFV==null)?hit.mfvW:(λ*sMFV + (1-λ)*hit.mfvW);
-        sVOL = (sVOL==null)?hit.volW:(λ*sVOL + (1-λ)*hit.volW);
+      const h=wkByT[t][w]; if(!h) continue;
+      if(isFin(h.mfvW)&&isFin(h.volW)){
+        sMFV=(sMFV==null)?h.mfvW:(λ*sMFV+(1-λ)*h.mfvW);
+        sVOL=(sVOL==null)?h.volW:(λ*sVOL+(1-λ)*h.volW);
       }
+      lastFriClose=h.close ?? lastFriClose;
     }
     const wtd=wtdByT[t]||{};
-    if (wtd.hasData && isFin(wtd.mfvWTD) && isFin(wtd.volWTD) && (sMFV!=null || sVOL!=null)){
-      const sMFV2 = (sMFV==null)? wtd.mfvWTD : (λ*sMFV + (1-λ)*wtd.mfvWTD);
-      const sVOL2 = (sVOL==null)? wtd.volWTD : (λ*sVOL + (1-λ)*wtd.volWTD);
-      const ratio = (sVOL2 && sVOL2>0) ? (sMFV2/sVOL2) : null;
-      flowNow[t] = (ratio==null)?null : Math.max(-1, Math.min(1, ratio));
+    if (wtd.hasData && isFin(wtd.mfvWTD) && isFin(wtd.volWTD)){
+      const sMFV2=(sMFV==null)?wtd.mfvWTD:(λ*sMFV+(1-λ)*wtd.mfvWTD);
+      const sVOL2=(sVOL==null)?wtd.volWTD:(λ*sVOL+(1-λ)*wtd.volWTD);
+      const ratio=(sVOL2 && sVOL2>0) ? (sMFV2/sVOL2) : null;
+      flowNow[t]=(ratio==null)?null:Math.max(-1,Math.min(1,ratio));
 
       if (isFin(wtd.todayClose) && isFin(wtd.prevFriClose) && wtd.prevFriClose>0){
-        priceNow[t] = Math.log(wtd.todayClose / wtd.prevFriClose);
-      } else {
-        priceNow[t] = null;
-      }
-    } else {
-      flowNow[t] = null; priceNow[t] = null;
-    }
+        priceNow[t]=Math.log(wtd.todayClose / wtd.prevFriClose);
+      } else priceNow[t]=null;
+    } else { flowNow[t]=null; priceNow[t]=null; }
   }
 
-  // 2) Cross-sectional percentile (WTD only)
+  // percentile each leg for WTD
   function xsecOne(map){
     const pair=[]; for(const t in map){ const v=map[t]; if(v!=null && Number.isFinite(v)) pair.push([t,v]); }
     pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; const out={};
@@ -444,13 +441,15 @@ function computeWTDPercentile(wkByT, wtdByT, wkArr, halfLife, curWeekKey){
   const fPct = xsecOne(flowNow);
   const pPct = xsecOne(priceNow);
 
-  // 3) Blend WTD percentiles, then re‑percentile the blend
+  // blend in percentile space
   const blended={};
   for(const t in wkByT){
     const f=fPct[t], p=pPct[t];
     if (f==null || p==null) continue;
-    blended[t] = 0.65*f + 0.35*p;
+    blended[t] = BLEND_FLOW*f + BLEND_PRICE*p;
   }
+
+  // re‑percentile blended WTD
   const pair=[]; for(const t in blended){ const v=blended[t]; if(v!=null && Number.isFinite(v)) pair.push([t,v]); }
   pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; const out={};
   for(let i=0;i<n;i++) out[pair[i][0]] = n>1 ? Math.round(i*100/(n-1)) : 50;
@@ -459,10 +458,7 @@ function computeWTDPercentile(wkByT, wtdByT, wkArr, halfLife, curWeekKey){
 }
 
 /* ======================================================================
-   Rendering:
-   - Historical columns: wkArr (previous-week keys).
-   - Final column: WTD (curWeekKey) — muted colors; "–" if no bars yet.
-   - Sorting uses the latest completed week only.
+   Rendering
 ====================================================================== */
 function getVal(t,w){
   const H=window._heat; if(!H) return null;
@@ -477,7 +473,6 @@ function render(){
   const latest=wkArr[wkArr.length-1];
   const sortBy=(sortSel?.value)||'ticker';
 
-  // Build rows (sorting strictly on historical percentiles)
   const rows = names.map(t=>{
     const label=(LABELS[active]||{})[t]||'';
     const series=wkArr.map(w=>getVal(t,w));
@@ -500,7 +495,6 @@ function render(){
     }
   });
 
-  // Header includes WTD
   const th=['<th>Group</th>','<th>Ticker</th>']
             .concat(wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`))
             .concat([`<th class="cell">WTD</th>`]).join('');
@@ -508,18 +502,15 @@ function render(){
 
   for(const R of rows){
     html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`;
-    // Historical cells
     for(const w of wkArr){
       const val=getVal(R.t,w);
       const cls = val==null? '' : (val>=80?'g' : val>=60?'y' : 'r');
       html += `<td class="cell ${cls}">${val??''}</td>`;
     }
-    // WTD cell (muted color; “–” if no bars yet this week)
-    const wv = R.wtdVal;
-    let wcls = '';
-    if (wv==null) wcls = '';
-    else wcls = (wv>=80?'gW' : wv>=60?'yW' : 'rW');
-    html += `<td class="cell ${wcls}">${wv==null ? '–' : wv}</td>`;
+    const wv=R.wtdVal; let wcls='';
+    if (wv==null) wcls='';
+    else wcls=(wv>=80?'gW':wv>=60?'yW':'rW');
+    html += `<td class="cell ${wcls}">${wv==null?'–':wv}</td>`;
     html += `</tr>`;
   }
 
@@ -527,7 +518,7 @@ function render(){
   document.getElementById('tableWrap').innerHTML=html;
 }
 
-/* ---------- Boot ---------- */
+/* ---------------- Boot ---------------- */
 window.addEventListener('DOMContentLoaded', () => {
   try {
     pillS.classList.toggle('active',active==='sectors');
