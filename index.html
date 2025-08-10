@@ -4,6 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Big Chart v2 — Sector & Industry Heatmap</title>
+
+  <!-- ===============================================================
+       Stylesheet
+       Purpose:
+       - Defines theme tokens, layout primitives, table/legend look, and
+         color classes for percentile buckets.
+       Notes:
+       - Purely presentational; no functional behavior here.
+  =============================================================== -->
   <style>
     :root { --bg:#0b0f14; --panel:#111823; --text:#e6edf3; --muted:#9fb0c3; --accent:#3aa3ff; }
     body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -19,23 +28,39 @@
     table{border-collapse:collapse;width:100%}
     th,td{border:1px solid #1b2733;padding:6px 8px;text-align:center}
     th{position:sticky;top:58px;background:#0f1722;z-index:1}
-    /* final, authoritative rules */
-    .cell{ min-width:18px; padding:4px 6px; }   /* narrower cells */
+    /* Heatmap cells: compact width for dense grids */
+    .cell{ min-width:18px; padding:4px 6px; }
+    /* Percentile bucket fills */
     .g{ background:#0f3; color:#061; }
-    /* yellow with dark text – keep only this one */
     .y{ background:#ffea5a !important; color:#000 !important; }
     .r{ background:#b22; color:#fee; }
+    /* Legend and table niceties */
     .legend{display:flex;gap:8px;align-items:center}
     .box{width:14px;height:14px;border-radius:3px;border:1px solid #0003}
     .box.g{background:#0f3}.box.y{background:#ffea5a}.box.r{background:#b22}
     .note{margin-top:6px}
     .small{font-size:12px}
+    /* Clamp the first column to keep table manageable */
     td.label{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;min-width:160px}
     th:first-child,td:first-child{max-width:200px;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    /* Control styling */
     select{background:#0e141b;color:var(--text);border:1px solid #2b3a4c;border-radius:8px;padding:6px 8px}
   </style>
 </head>
 <body>
+
+  <!-- ===============================================================
+       Header Controls
+       Contains:
+       - Dataset pills (Sectors / Industry Groups)
+       - Mode toggle (CMF-only vs Composite)
+       - Sorting dropdown
+       - Refresh button
+       - Legend
+       - Lookback and EWMA half-life selectors
+       Behavior:
+       - Click events are wired in the script to update state and re-render.
+  =============================================================== -->
   <header>
     <div class="row">
       <span class="pill" id="pillSectors">Sectors</span>
@@ -78,7 +103,7 @@
       </select>
 
       <label class="muted small">Half‑life (EWMA)</label>
-      <select id="halfLife" title="Weeks for EWMA half‑life">
+      <select id="halfLife" title="Weeks for EWMA half-life">
         <option>1</option>
         <option>2</option>
         <option>4</option>
@@ -90,6 +115,12 @@
     </div>
   </header>
 
+  <!-- ===============================================================
+       Main Content Area
+       - Note: brief instructions
+       - Status: transient messages from script
+       - tableWrap: container where the heatmap table is injected
+  =============================================================== -->
   <main>
     <div class="note muted small">
       Data URLs are hard‑coded per pill; no manual entry needed. Use the <b>Sectors / Industry Groups</b> pills to switch, then hit <b>Refresh</b> to reload.
@@ -99,7 +130,24 @@
   </main>
 
 <script>
-// ===== constants =====
+/* ===============================================================
+   Big Chart v2 — Sector & Industry Heatmap (Documentation)
+   Summary:
+   - Loads daily OHLCV CSVs (Google Sheets "Published to web")
+   - Aggregates to weekly (Friday) buckets
+   - Computes CMF and weekly returns per ticker per week
+   - v1: CMF-only → cross-sectional percentiles by week
+   - v2: Composite = EWMA(CMF) + EWMA(Return) → x-sec percentiles → 65/35
+   - Renders the percentiles as a color heatmap
+   Persistence:
+   - Stores mode, lookback, and half-life in localStorage
+================================================================ */
+
+/* ============================== Constants ===============================
+   DATA_URL: endpoints per dataset pill
+   MODE_KEY/N_KEY/H_KEY: localStorage keys for user prefs
+   LABELS: human-readable names per ticker (used in first column)
+========================================================================= */
 const DATA_URL = {
   sectors: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRb0KGQYJoXfcLSE9_HUGVV513UrBMn3M5DhtqJHDyXgYLamBBsKQDwo7rR6Lvu-dTvU82ex9nt2igO/pub?gid=0&single=true&output=csv',
   industries: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQwCu-AtG33jHIxKaVpP9kCCC3R_oQfvK6kumzG3WuUZGCwpSp1d1MoZxV3ESg7--NveInP2zEA2QVL/pub?gid=0&single=true&output=csv'
@@ -108,9 +156,13 @@ const MODE_KEY = 'heatmap_mode';
 const N_KEY = 'heatmap_lookback_weeks';
 const H_KEY = 'heatmap_half_life';
 
-// label maps
+// Label maps for rendering
 const LABELS = {
-  sectors: { XLB:'Materials', XLE:'Energy', XLF:'Financials', XLI:'Industrials', XLK:'Information Technology', XLP:'Consumer Staples', XLU:'Utilities', XLV:'Health Care', XLY:'Consumer Discretionary', XLRE:'Real Estate', XLC:'Communication Services' },
+  sectors: {
+    XLB:'Materials', XLE:'Energy', XLF:'Financials', XLI:'Industrials', XLK:'Information Technology',
+    XLP:'Consumer Staples', XLU:'Utilities', XLV:'Health Care', XLY:'Consumer Discretionary',
+    XLRE:'Real Estate', XLC:'Communication Services'
+  },
   industries: {
     XOP:'Energy – Oil & Gas E&P', OIH:'Energy – Oil Services', FCG:'Energy – Natural Gas',
     XME:'Materials – Metals & Mining', XLB:'Materials – Broad',
@@ -126,7 +178,14 @@ const LABELS = {
   }
 };
 
-// ===== state & controls =====
+/* ============================== State & DOM =============================
+   State persisted across sessions:
+   - active: which pill is selected
+   - mode: CMF-only (v1) or Composite (v2)
+   - LOOKBACK_N: number of weeks to show
+   - HALF_LIFE: EWMA half-life for smoothing in Composite
+   DOM refs: cache once and reuse
+========================================================================= */
 let active = localStorage.getItem('heatmap_active') || 'industries';
 let mode = localStorage.getItem(MODE_KEY) || 'v2';
 let LOOKBACK_N = +(localStorage.getItem(N_KEY) || 12);
@@ -143,10 +202,21 @@ const optAvg = document.getElementById('optAvg');
 const lookSel = document.getElementById('lookbackN');
 const halfSel = document.getElementById('halfLife');
 
+// Initialize control values from persisted state
 if (lookSel) lookSel.value = String(LOOKBACK_N);
 if (halfSel) halfSel.value = String(HALF_LIFE);
 updateAvgOptionLabel();
 
+/* ============================== Event Wiring ============================
+   lookSel.onchange:
+     - Update lookback, persist, fix label, reload data from CSV
+   halfSel.onchange:
+     - Update half-life, persist, recompute Composite in-memory, re-render
+   sortSel.onchange:
+     - Resort and re-render only
+   Pill/mode buttons:
+     - Update state and re-render
+========================================================================= */
 lookSel.onchange = async () => {
   LOOKBACK_N = +lookSel.value;
   localStorage.setItem(N_KEY, LOOKBACK_N);
@@ -161,8 +231,20 @@ halfSel.onchange = () => {
 };
 sortSel.onchange = ()=> render();
 
-function updateAvgOptionLabel(){ if (optAvg) optAvg.textContent = `${LOOKBACK_N}\u2011week avg (desc)`; }
+/**
+ * updateAvgOptionLabel
+ * Keeps the "Window avg" sort label in sync with current lookback.
+ */
+function updateAvgOptionLabel(){
+  if (optAvg) optAvg.textContent = `${LOOKBACK_N}\u2011week avg (desc)`;
+}
 
+/**
+ * setActive
+ * Switches active pill and updates UI highlighting. Triggers a render
+ * if we already have data loaded.
+ * @param {"sectors"|"industries"} which
+ */
 function setActive(which){
   active = which === 'sectors' ? 'sectors' : 'industries';
   localStorage.setItem('heatmap_active', active);
@@ -173,25 +255,61 @@ function setActive(which){
   if (window._heat) render();
 }
 
+// Pill & mode bindings
 pillS.onclick = ()=>{ setActive('sectors'); };
 pillI.onclick = ()=>{ setActive('industries'); };
 modeV1.onclick = ()=>{ mode='v1'; localStorage.setItem(MODE_KEY, mode); setActive(active); render(); };
 modeV2.onclick = ()=>{ mode='v2'; localStorage.setItem(MODE_KEY, mode); setActive(active); render(); };
 btnRefresh.onclick = ()=> loadActive();
 
-function flash(msg){ statusEl.textContent = msg; setTimeout(()=>statusEl.textContent='', 3000); }
+/**
+ * flash
+ * Shows a temporary status line message under the controls.
+ * @param {string} msg
+ */
+function flash(msg){
+  statusEl.textContent = msg;
+  setTimeout(()=>statusEl.textContent='', 3000);
+}
 
-// ===== helpers =====
+/* ============================== Helpers =================================
+   weekKey:
+     - Normalizes a date to its Friday (UTC) to form a weekly key
+   lambdaFromHalfLife:
+     - Converts EWMA half-life H to lambda: 0.5^(1/H)
+   ewma:
+     - Computes exponentially weighted moving average over an ordered
+       array of { w, value } items; returns week→smoothed value map
+========================================================================= */
 function weekKey(dt){
   const x = new Date(dt); const wd = x.getUTCDay();
   const offset = (5 - wd + 7) % 7; // next/this Friday
   x.setUTCDate(x.getUTCDate()+offset); x.setUTCHours(0,0,0,0);
   return x.toISOString().slice(0,10);
 }
-function lambdaFromHalfLife(H){ return Math.pow(0.5, 1/Math.max(1, H)); }
-function ewma(arr, lambda){ let s=null; const out={}; for(const {w,value} of arr){ s=(s==null)?value:(lambda*s+(1-lambda)*value); out[w]=s; } return out; }
+function lambdaFromHalfLife(H){
+  return Math.pow(0.5, 1/Math.max(1, H));
+}
+function ewma(arr, lambda){
+  let s=null; const out={};
+  for(const {w,value} of arr){
+    s=(s==null)?value:(lambda*s+(1-lambda)*value);
+    out[w]=s;
+  }
+  return out;
+}
 
-// ===== data build =====
+/* ============================== Data Build ==============================
+   loadActive:
+     - Fetches the correct CSV for the selected pill and builds the model
+   buildHeatmap:
+     - Parses CSV → daily bars per ticker
+     - Aggregates to weekly CMF and weekly return
+     - Generates:
+         pctV1: CMF-only cross-sectional percentiles
+         compPct: Composite (EWMA CMF/Return → x-sec pct → 65/35)
+     - Caches results and renders
+========================================================================= */
 async function loadActive(){
   const url = DATA_URL[active];
   if(!url){ alert(`No URL configured for ${active}`); return; }
@@ -200,17 +318,23 @@ async function loadActive(){
 
 async function buildHeatmap(url){
   try{
+    // Handle local file browsing (file://) with a simple CORS proxy
     const needsProxy = location.protocol === 'file:';
     const proxied = needsProxy ? 'https://cors.isomorphic-git.org/' + url : url;
+
+    // Fetch CSV and perform minimal parsing
     const res = await fetch(proxied);
     if(!res.ok) throw new Error('Fetch failed: '+res.status);
     const text = (await res.text()).replace(/^\uFEFF/, '').trim();
     const rows = text.split(/\r?\n/).map(r=>r.split(','));
     const header = rows.shift().map(h=>h.replace(/\uFEFF/g,'').trim().toLowerCase());
+
+    // Validate required headers
     const need = ['date','ticker','open','high','low','close','volume'];
     for(const k of need){ if(!header.includes(k)) throw new Error('Missing header: '+k); }
     const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
 
+    // Build daily bar arrays per ticker
     const byT = {};
     for(const r of rows){
       const t = (r[idx.ticker]||'').toUpperCase();
@@ -221,24 +345,35 @@ async function buildHeatmap(url){
     }
     for(const t in byT){ byT[t].sort((a,b)=>a.d-b.d); }
 
+    // Aggregate to weekly CMF and weekly returns
     const weeks = new Set();
     const wkByT = {};
     for(const t in byT){
       const weekMap = {}; let prevFriClose = null; let acc = {}; let curW = null;
       for(const bar of byT[t]){
         const w = weekKey(bar.d);
+
+        // If the week changed, finalize the previous one
         if(curW && w !== curW){
           const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
           const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
-          weekMap[curW] = {cmf, ret}; prevFriClose = acc.close; acc = {};
+          weekMap[curW] = {cmf, ret};
+          prevFriClose = acc.close;
+          acc = {};
         }
+
+        // Accumulate money-flow for CMF and track closing price
         curW = w;
         const mfm = ((bar.c - bar.l) - (bar.h - bar.c)) / (bar.h - bar.l);
         const mfv = mfm * bar.v;
         acc.mfv = (acc.mfv||0) + (isFinite(mfv)? mfv: 0);
         acc.vol = (acc.vol||0) + (isFinite(bar.v)? bar.v: 0);
-        acc.close = bar.c; weeks.add(w);
+        acc.close = bar.c;
+
+        weeks.add(w);
       }
+
+      // Finalize the last partial week for this ticker
       if(curW){
         const cmf = acc.vol>0 ? acc.mfv/acc.vol : 0;
         const ret = (prevFriClose!=null && acc.close!=null && prevFriClose>0) ? (acc.close/prevFriClose - 1) : 0;
@@ -247,55 +382,178 @@ async function buildHeatmap(url){
       wkByT[t] = weekMap;
     }
 
+    // Select only the last N weeks based on current lookback
     const allWeeks = Array.from(weeks).sort();
     const wkArr = allWeeks.slice(-Math.max(1, LOOKBACK_N));
 
-    // v1 (CMF-only)
+    // v1: CMF-only cross-sectional percentiles for each week
     const pctV1 = {};
     for(const w of wkArr){
-      const pair = []; for(const t in wkByT){ const hit = wkByT[t][w]; if(hit) pair.push([t, hit.cmf]); }
-      pair.sort((a,b)=>a[1]-b[1]); const n = pair.length;
+      const pair = [];
+      for(const t in wkByT){ const hit = wkByT[t][w]; if(hit) pair.push([t, hit.cmf]); }
+      pair.sort((a,b)=>a[1]-b[1]);
+      const n = pair.length;
       pair.forEach((p,i)=>{ (pctV1[p[0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50; });
     }
 
-    // v2 Composite
+    // v2: Composite = EWMA(CMF) + EWMA(Return) → x-sec percentiles → 65/35 combine
     const compPct = computeCompositePct(wkByT, wkArr, HALF_LIFE);
 
+    // Cache and render
     window._heat = { wkArr, pctV1, compPct, wkByT };
     render();
     const modeLabel = (mode==='v2'?'Composite (Price+Flow)':'CMF only');
     flash(`Loaded ${Object.keys(wkByT).length} tickers • ${wkArr.length} weeks from ${active} • Mode: ${modeLabel}.`);
-  }catch(err){ console.error(err); alert(err.message || 'Could not load/parse CSV'); }
+  }catch(err){
+    console.error(err);
+    alert(err.message || 'Could not load/parse CSV');
+  }
 }
 
-function recomputeComposite(){ const H = window._heat; if(!H) return; H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE); }
+/**
+ * recomputeComposite
+ * Rebuilds the Composite percentiles using the current HALF_LIFE without
+ * refetching data. Called when the user changes the half-life control.
+ */
+function recomputeComposite(){
+  const H = window._heat; if(!H) return;
+  H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE);
+}
+
+/**
+ * computeCompositePct
+ * Steps:
+ * 1) Smooth CMF and Return with EWMA (lambda from half-life)
+ * 2) Convert each smoothed series to cross-sectional percentiles per week
+ * 3) Combine as 65% Flow, 35% Performance
+ * @param {Object} wkByT - ticker -> week -> { cmf, ret }
+ * @param {string[]} wkArr - ordered week keys within lookback
+ * @param {number} halfLife - EWMA half-life in weeks
+ * @returns {Object} ticker -> week -> composite percentile (0..100)
+ */
 function computeCompositePct(wkByT, wkArr, halfLife){
   const L = lambdaFromHalfLife(halfLife);
   const flowEW = {}, perfEW = {};
-  for(const t in wkByT){ const sF=[], sR=[]; for(const w of wkArr){ const hit=wkByT[t][w]; if(!hit) continue; sF.push({w,value:hit.cmf}); sR.push({w,value:hit.ret}); } flowEW[t]=ewma(sF,L); perfEW[t]=ewma(sR,L); }
-  function xsec(map){ const out={}; for(const w of wkArr){ const pair=[]; for(const t in map){ if(map[t][w]!=null) pair.push([t,map[t][w]]);} pair.sort((a,b)=>a[1]-b[1]); const n=pair.length; pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w]= n>1? Math.round(i*100/(n-1)) : 50;}); } return out; }
+
+  // Build smoothed series per ticker
+  for(const t in wkByT){
+    const sF=[], sR=[];
+    for(const w of wkArr){
+      const hit=wkByT[t][w]; if(!hit) continue;
+      sF.push({w,value:hit.cmf});
+      sR.push({w,value:hit.ret});
+    }
+    flowEW[t]=ewma(sF,L);
+    perfEW[t]=ewma(sR,L);
+  }
+
+  // Cross-sectional percentiles by week
+  function xsec(map){
+    const out={};
+    for(const w of wkArr){
+      const pair=[];
+      for(const t in map){ if(map[t][w]!=null) pair.push([t,map[t][w]]); }
+      pair.sort((a,b)=>a[1]-b[1]);
+      const n=pair.length;
+      pair.forEach((p,i)=>{ (out[p[0]] ||= {})[w]= n>1? Math.round(i*100/(n-1)) : 50; });
+    }
+    return out;
+  }
+
   const fPct = xsec(flowEW), pPct = xsec(perfEW), out={};
-  for(const t in wkByT){ for(const w of wkArr){ const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w]; if(f==null||p==null) continue; (out[t] ||= {})[w] = Math.round(0.65*f + 0.35*p); } }
+
+  // Weighted combine (65% flow, 35% performance)
+  for(const t in wkByT){
+    for(const w of wkArr){
+      const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w];
+      if(f==null||p==null) continue;
+      (out[t] ||= {})[w] = Math.round(0.65*f + 0.35*p);
+    }
+  }
   return out;
 }
 
-// ===== render =====
-function getVal(t,w){ const H = window._heat; if(!H) return null; return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w]; }
-function avg(arr){ const f = arr.filter(v=>v!=null); return f.length ? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null; }
-
+/* ============================== Rendering ===============================
+   getVal:
+     - Returns the percentile value for a ticker/week based on active mode
+   avg:
+     - Average of defined numeric values; used for "Window avg" sorting
+   render:
+     - Builds the table HTML and paints cells with r/y/g classes
+     - Supports multiple sort modes (ticker, group, latest, avg, momentum)
+========================================================================= */
+function getVal(t,w){
+  const H = window._heat; if(!H) return null;
+  return mode==='v2' ? (H.compPct[t]||{})[w] : (H.pctV1[t]||{})[w];
+}
+function avg(arr){
+  const f = arr.filter(v=>v!=null);
+  return f.length ? Math.round(f.reduce((a,b)=>a+b,0)/f.length) : null;
+}
 function render(){
-  const H = window._heat; if(!H) return; const { wkArr, wkByT } = H; const names = Object.keys(wkByT); const latest = wkArr[wkArr.length-1]; const sortBy = (sortSel?.value)||'ticker';
-  const rows = names.map(t=>{ const label=(LABELS[active]||{})[t]||''; const series=wkArr.map(w=>getVal(t,w)); const latestVal=getVal(t,latest); const avgN=avg(series); const mom4 = (()=>{ const i=wkArr.length-1, j=Math.max(0,wkArr.length-5); const a=getVal(t,wkArr[i]), b=(wkArr.length>4)?getVal(t,wkArr[j]):null; return (a!=null&&b!=null)?(a-b):null; })(); return { t,label,latestVal,avgN,mom4 }; });
-  rows.sort((A,B)=>{ switch(sortBy){ case 'group': return (A.label||'').localeCompare(B.label||'')||A.t.localeCompare(B.t); case 'latest': return (B.latestVal??-1)-(A.latestVal??-1)||A.t.localeCompare(B.t); case 'avgN': return (B.avgN??-1)-(A.avgN??-1)||A.t.localeCompare(B.t); case 'mom4': return (B.mom4??-1)-(A.mom4??-1)||A.t.localeCompare(B.t); default: return A.t.localeCompare(B.t);} });
-  const th=['<th>Group</th>','<th>Ticker</th>'].concat(H.wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
+  const H = window._heat; if(!H) return;
+  const { wkArr, wkByT } = H;
+  const names = Object.keys(wkByT);
+  const latest = wkArr[wkArr.length-1];
+  const sortBy = (sortSel?.value)||'ticker';
+
+  // Build sortable row model
+  const rows = names.map(t=>{
+    const label=(LABELS[active]||{})[t]||'';
+    const series=wkArr.map(w=>getVal(t,w));
+    const latestVal=getVal(t,latest);
+    const avgN=avg(series);
+    const mom4 = (()=>{
+      const i=wkArr.length-1, j=Math.max(0,wkArr.length-5);
+      const a=getVal(t,wkArr[i]), b=(wkArr.length>4)?getVal(t,wkArr[j]):null;
+      return (a!=null&&b!=null)?(a-b):null;
+    })();
+    return { t,label,latestVal,avgN,mom4 };
+  });
+
+  // Apply selected sort
+  rows.sort((A,B)=>{
+    switch(sortBy){
+      case 'group': return (A.label||'').localeCompare(B.label||'')||A.t.localeCompare(B.t);
+      case 'latest': return (B.latestVal??-1)-(A.latestVal??-1)||A.t.localeCompare(B.t);
+      case 'avgN': return (B.avgN??-1)-(A.avgN??-1)||A.t.localeCompare(B.t);
+      case 'mom4': return (B.mom4??-1)-(A.mom4??-1)||A.t.localeCompare(B.t);
+      default: return A.t.localeCompare(B.t);
+    }
+  });
+
+  // Construct table HTML
+  const th=['<th>Group</th>','<th>Ticker</th>']
+           .concat(H.wkArr.map(w=>`<th class="cell">${w.slice(5)}</th>`)).join('');
   let html = `<table><thead><tr>${th}</tr></thead><tbody>`;
-  for(const R of rows){ html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`; for(const w of H.wkArr){ const val=getVal(R.t,w); const cls = val==null? '' : (val>=80?'g' : val>=60?'y' : 'r'); html += `<td class="cell ${cls}">${val??''}</td>`; } html += '</tr>'; }
-  html += '</tbody></table>'; document.getElementById('tableWrap').innerHTML = html;
+  for(const R of rows){
+    html += `<tr><td class="label">${R.label}</td><td>${R.t}</td>`;
+    for(const w of H.wkArr){
+      const val=getVal(R.t,w);
+      const cls = val==null? '' : (val>=80?'g' : val>=60?'y' : 'r');
+      html += `<td class="cell ${cls}">${val??''}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('tableWrap').innerHTML = html;
 }
 
-// ===== boot =====
+/* ============================== Bootstrapping ===========================
+   On DOM ready:
+   - Reflect current state in the UI
+   - Load active dataset and render the heatmap
+   - Surface any init errors in the status line
+========================================================================= */
 window.addEventListener('DOMContentLoaded', () => {
-  try { setActive(active); loadActive(); } catch(e){ console.error(e); const s=document.getElementById('status'); if(s) s.textContent='Init error: '+(e.message||e); }
+  try {
+    setActive(active);
+    loadActive();
+  } catch(e){
+    console.error(e);
+    const s=document.getElementById('status');
+    if (s) s.textContent='Init error: '+(e.message||e);
+  }
 });
 </script>
 </body>
