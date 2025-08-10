@@ -122,7 +122,7 @@
 /* ---------------- Config toggles (analyst‑friendly) ---------------- */
 const BLEND_FLOW = 0.65;     // weight of flow leg in composite
 const BLEND_PRICE = 0.35;    // weight of price leg
-const RE_PERCENTILE_AFTER_BLEND = false; // set false to see raw blended percentiles
+const RE_PERCENTILE_AFTER_BLEND = true; // set false to see raw blended percentiles
 
 /* ---------------- Data sources (CSV) ---------------- */
 const DATA_URL = {
@@ -181,6 +181,18 @@ btnRefresh.onclick=()=>loadActive();
 sortSel.onchange=()=>render();
 lookSel.onchange=async()=>{ LOOKBACK_N=+lookSel.value; localStorage.setItem(N_KEY,LOOKBACK_N); updateAvgOptionLabel(); await loadActive(); };
 halfSel.onchange=()=>{ HALF_LIFE=+halfSel.value; localStorage.setItem(H_KEY,HALF_LIFE); recomputeComposite(); render(); };
+
+// --- Toggle for final re-percentile after blend ---
+const pctToggle = document.createElement('button');
+pctToggle.textContent = RE_PERCENTILE_AFTER_BLEND ? 'Re-%: ON' : 'Re-%: OFF';
+pctToggle.className = 'pill';
+pctToggle.onclick = () => {
+  RE_PERCENTILE_AFTER_BLEND = !RE_PERCENTILE_AFTER_BLEND;
+  pctToggle.textContent = RE_PERCENTILE_AFTER_BLEND ? 'Re-%: ON' : 'Re-%: OFF';
+  recomputeComposite();  // Recalculate composites
+  render();              // Re-render table
+};
+document.querySelector('header .row:last-child').appendChild(pctToggle);
 
 function reflectMode(){ modeV1.classList.toggle('active',mode==='v1'); modeV2.classList.toggle('active',mode==='v2'); }
 function updateAvgOptionLabel(){ if (optAvg) optAvg.textContent=`${LOOKBACK_N}\u2011week avg (desc)`; }
