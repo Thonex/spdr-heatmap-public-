@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Big Chart v22D — Sector & Industry Heatmap (Prev‑Week + WTD)</title>
+  <title>Big Chart v22D — Sector & Industry Heatmap (Prev‑Week + WTD, Price‑EWMA Fix)</title>
   <style>
     :root { --bg:#0b0f14; --panel:#111823; --text:#e6edf3; --muted:#9fb0c3; --accent:#3aa3ff; }
     body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -107,7 +107,7 @@
         - Daily MFV = MFM × Volume. Skip zero/NaN volume.
         - Weekly sums per ticker: Σ MFV, Σ Vol, and close.
         - Smooth with λ from half‑life H: Flow_t = EWMA(ΣMFV)/EWMA(ΣVol).
-     3) Price leg: weekly log-return r_t = ln(C_t / C_{t−1}); smoothed with same λ.
+     3) Price leg (**patched**): EWMA of weekly log-return r_t = ln(C_t / C_{t−1}).
      4) Cross‑section percentiles per week for each leg.
      5) Blend in percentile space: 65% Flow + 35% Price.
      6) Re‑percentile the blended scores per week → Composite percentile (0..100).
@@ -119,7 +119,7 @@
      - Cross‑section percentile both legs (current week only), blend 65/35,
        re‑percentile → one 0..100 snapshot.
      - If no bars yet (weekend/holiday) → show "–".
-   =======================================================================*/
+  =======================================================================*/
 
 /* ---------- Data sources (CSV) ---------- */
 const DATA_URL = {
@@ -191,14 +191,13 @@ function setActive(which){
 function flash(msg){ statusEl.textContent=msg; setTimeout(()=>statusEl.textContent='',3000); }
 
 /* ---------- Date/Math helpers ---------- */
-/** Map Date→previous Friday key ("YYYY-MM-DD", UTC). */
 function weekKeyPrev(dt){
   const x=new Date(dt); const wd=x.getUTCDay(); const back=(wd-5+7)%7; x.setUTCDate(x.getUTCDate()-back); x.setUTCHours(0,0,0,0);
   return x.toISOString().slice(0,10);
 }
+function weekKeyNext(dt){ const x=new Date(dt); const wd=x.getUTCDay(); const fwd=(5-wd+7)%7; x.setUTCDate(x.getUTCDate()+fwd); x.setUTCHours(0,0,0,0); return x.toISOString().slice(0,10); }
 function lambdaFromHalfLife(H){ return Math.pow(0.5, 1/Math.max(1e-9,H)); }
 function clamp(x,lo,hi){ return Math.max(lo,Math.min(hi,x)); }
-/** Simple EWMA over ordered [{w,value}] with carry-forward on gaps. */
 function ewma(arr,lambda){ let s=null; const out={}; for(const {w,value} of arr){ const v=Number.isFinite(value)?value:null; if(v==null){ if(s!=null) out[w]=s; continue; } s=(s==null)?v:(lambda*s+(1-lambda)*v); out[w]=s; } return out; }
 
 /* ======================================================================
@@ -244,7 +243,7 @@ async function buildHeatmap(url){
     const wkByT={};   // ticker -> weekKeyPrev -> { cmf, retLog, mfvW, volW, close }
     const wtdByT={};  // ticker -> { hasData, mfvWTD, volWTD, todayClose, prevFriClose }
     const today=new Date();
-    const curWeekKey=(function weekKeyNext(dt){ const x=new Date(dt); const wd=x.getUTCDay(); const fwd=(5-wd+7)%7; x.setUTCDate(x.getUTCDate()+fwd); x.setUTCHours(0,0,0,0); return x.toISOString().slice(0,10);} )(today);
+    const curWeekKey=weekKeyNext(today);
 
     for(const t in byT){
       const weekMap={};
@@ -278,7 +277,7 @@ async function buildHeatmap(url){
         weeks.add(wPrev);
 
         // WTD partials: bars whose weekKeyNext == current week's Friday
-        const wNext=(function weekKeyNext(dt){ const x=new Date(dt); const wd=x.getUTCDay(); const fwd=(5-wd+7)%7; x.setUTCDate(x.getUTCDate()+fwd); x.setUTCHours(0,0,0,0); return x.toISOString().slice(0,10);} )(bar.d);
+        const wNext=weekKeyNext(bar.d);
         if(wNext===curWeekKey){
           wtd.hasData=true;
           if(vol>0){ wtd.mfvWTD += mfm*vol; wtd.volWTD += vol; }
@@ -322,8 +321,9 @@ async function buildHeatmap(url){
 }
 
 /* ======================================================================
-   Composite (historical weeks): ratio-of-EWMAs (flow) + raw log-return
+   Composite (historical weeks): ratio-of-EWMAs (flow) + EWMA(log-return)
    (price) → per-week percentiles → 65/35 blend → re‑percentile.
+   >>> PRICE LEG PATCHED HERE: price leg is now EWMA-smoothed <<<
 ====================================================================== */
 function recomputeComposite(){
   const H=window._heat; if(!H) return;
@@ -333,7 +333,7 @@ function computeCompositePct(wkByT, wkArr, halfLife){
   const λ = lambdaFromHalfLife(halfLife);
   const isFin=(x)=>Number.isFinite(x);
 
-  // Flow: EWMA(MFV)/EWMA(Vol)
+  // ---- Flow: EWMA(MFV)/EWMA(Vol), gently bounded to [-1, +1] ----
   const flowMap={};
   for(const t in wkByT){
     let sMFV=null, sVOL=null; const series={}; const fallback=[];
@@ -342,28 +342,31 @@ function computeCompositePct(wkByT, wkArr, halfLife){
       if(isFin(hit.mfvW)&&isFin(hit.volW)){
         sMFV=(sMFV==null)?hit.mfvW:(λ*sMFV+(1-λ)*hit.mfvW);
         sVOL=(sVOL==null)?hit.volW:(λ*sVOL+(1-λ)*hit.volW);
-        series[w]=(sVOL&&sVOL>0)?(sMFV/sVOL):null;
+        const ratio = (sVOL && sVOL>0) ? (sMFV/sVOL) : null;
+        series[w] = (ratio==null)?null : Math.max(-1, Math.min(1, ratio));
       }else if(isFin(hit.cmf)){ fallback.push({w,value:hit.cmf}); }
     }
     flowMap[t]=Object.keys(series).length?series:ewma(fallback,λ);
   }
-  // Price: weekly log returns (raw)
+
+  // ---- PRICE LEG (PATCH): EWMA of weekly log-returns ----
   const perfMap={};
   for(const t in wkByT){
-    const s={};
+    const sR=[];
     for(const w of wkArr){
       const hit=wkByT[t][w]; if(!hit) continue;
-      const r=Number.isFinite(hit.retLog)?hit.retLog:(Number.isFinite(hit.ret)?Math.log(1+hit.ret):null);
-      s[w]=(r==null)?null:r;
+      const r = isFin(hit.retLog) ? hit.retLog
+               : (isFin(hit.ret) ? Math.log(1+hit.ret) : null);
+      if (r != null) sR.push({ w, value: r });
     }
-    perfMap[t]=s;
+    perfMap[t] = ewma(sR, λ); // smooth before cross-sectional ranking
   }
 
-  // Percentiles helper
+  // ---- Per-week cross-sectional percentiles for each leg ----
   function xsec(map){
     const out={};
     for(const w of wkArr){
-      const pair=[]; for(const t in map){ const v=map[t][w]; if(v!=null && Number.isFinite(v)) pair.push([t,v]); }
+      const pair=[]; for(const t in map){ const v=map[t][w]; if(v!=null && isFin(v)) pair.push([t,v]); }
       pair.sort((a,b)=>a[1]-b[1]); const n=pair.length;
       for(let i=0;i<n;i++) (out[pair[i][0]] ||= {})[w]= n>1 ? Math.round(i*100/(n-1)) : 50;
     }
@@ -371,7 +374,7 @@ function computeCompositePct(wkByT, wkArr, halfLife){
   }
   const fPct=xsec(flowMap), pPct=xsec(perfMap);
 
-  // Blend in percentile space
+  // ---- Blend in percentile space ----
   const blended={};
   for(const t in wkByT) for(const w of wkArr){
     const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w];
@@ -379,10 +382,10 @@ function computeCompositePct(wkByT, wkArr, halfLife){
     (blended[t] ||= {})[w] = 0.65*f + 0.35*p;
   }
 
-  // Re‑percentile blended
+  // ---- Re‑percentile blended ----
   const out={};
   for(const w of wkArr){
-    const pair=[]; for(const t in blended){ const v=blended[t][w]; if(v!=null&&Number.isFinite(v)) pair.push([t,v]); }
+    const pair=[]; for(const t in blended){ const v=blended[t][w]; if(v!=null&&isFin(v)) pair.push([t,v]); }
     pair.sort((a,b)=>a[1]-b[1]); const n=pair.length;
     for(let i=0;i<n;i++) (out[pair[i][0]] ||= {})[w]= n>1 ? Math.round(i*100/(n-1)) : 50;
   }
@@ -418,7 +421,8 @@ function computeWTDPercentile(wkByT, wtdByT, wkArr, halfLife, curWeekKey){
     if (wtd.hasData && isFin(wtd.mfvWTD) && isFin(wtd.volWTD) && (sMFV!=null || sVOL!=null)){
       const sMFV2 = (sMFV==null)? wtd.mfvWTD : (λ*sMFV + (1-λ)*wtd.mfvWTD);
       const sVOL2 = (sVOL==null)? wtd.volWTD : (λ*sVOL + (1-λ)*wtd.volWTD);
-      flowNow[t] = (sVOL2 && sVOL2>0) ? (sMFV2/sVOL2) : null;
+      const ratio = (sVOL2 && sVOL2>0) ? (sMFV2/sVOL2) : null;
+      flowNow[t] = (ratio==null)?null : Math.max(-1, Math.min(1, ratio));
 
       if (isFin(wtd.todayClose) && isFin(wtd.prevFriClose) && wtd.prevFriClose>0){
         priceNow[t] = Math.log(wtd.todayClose / wtd.prevFriClose);
