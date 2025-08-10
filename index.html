@@ -309,76 +309,105 @@ async function buildHeatmap(url){
   }
 }
 
-/* ============================== Composite ============================== */
+/**
+ * recomputeComposite
+ * Rebuilds composite with current HALF_LIFE (previous-week methodology assumed upstream).
+ */
 function recomputeComposite(){
-  const H = window._heat; if(!H) return;
+  const H = window._heat; if (!H) return;
   H.compPct = computeCompositePct(H.wkByT, H.wkArr, HALF_LIFE);
 }
+
+/**
+ * computeCompositePct (v22C)
+ * Flow = ratio-of-EWMAs: EWMA(MFV) / EWMA(Vol)
+ * Price = log-returns (optionally σ-scaled — off by default for more “rotation” contrast)
+ * Each leg → per-week percentiles, then 65/35 blend, then re‑percentile the blended score.
+ *
+ * @param {Object} wkByT  ticker -> week -> { cmf, mfvW, volW, retLog, ret? }
+ * @param {string[]} wkArr ordered week keys (use previous-week bucketing upstream)
+ * @param {number} halfLife EWMA half-life in weeks
+ * @returns {Object} ticker -> week -> composite percentile (0..100)
+ */
 function computeCompositePct(wkByT, wkArr, halfLife){
   const λ = lambdaFromHalfLife(halfLife);
   const isFin = (x)=>Number.isFinite(x);
 
-  // Build per-ticker decayed flow and performance
+  // ---- 1) Build decayed Flow series: EWMA(MFV) / EWMA(Vol) ----
   const flowMap = {};
-  const perfMap = {};
-
-  for(const t in wkByT){
-    let sMFV=null, sVOL=null;   // for flow
-    let sVar=null;              // for momentum σ
-    const fSeries = {};
-    const pSeries = {};
-
-    for(const w of wkArr){
-      const hit = wkByT[t][w]; if(!hit) continue;
-
-      // Flow: ratio of EWMAs (bounded)
+  for (const t in wkByT){
+    let sMFV = null, sVOL = null;
+    const series = {};
+    let fallback = []; // if mfvW/volW missing, we’ll EWMA(CMF) as a fallback
+    for (const w of wkArr){
+      const hit = wkByT[t][w]; if (!hit) continue;
       if (isFin(hit.mfvW) && isFin(hit.volW)) {
-        sMFV = (sMFV==null) ? hit.mfvW : (λ*sMFV + (1-λ)*hit.mfvW);
-        sVOL = (sVOL==null) ? hit.volW : (λ*sVOL + (1-λ)*hit.volW);
-        fSeries[w] = (sVOL && sVOL>0) ? (sMFV/sVOL) : null;
-      } else {
-        fSeries[w] = isFin(hit.cmf) ? hit.cmf : null; // fallback
-      }
-
-      // Performance: log-return, with optional σ-scaling
-      let r = isFin(hit.retLog) ? hit.retLog : null;
-      if (r==null && isFin(hit.ret)) r = Math.log(1 + hit.ret);
-      if (r!=null){
-        if (SCALE_MOM === 'on'){
-          sVar = (sVar==null) ? r*r : (λ*sVar + (1-λ)*r*r);
-          const sigma = Math.sqrt(Math.max(1e-12, sVar));
-          pSeries[w] = r / sigma;
-        } else {
-          // “Raw” momentum feel: optionally smooth the return itself a touch
-          pSeries[w] = r; // could also EWMA the mean: pSeries[w] = (pSeries[w]??r)*λ + (1-λ)*r;
-        }
-      } else {
-        pSeries[w] = null;
+        sMFV = (sMFV==null) ? hit.mfvW : λ*sMFV + (1-λ)*hit.mfvW;
+        sVOL = (sVOL==null) ? hit.volW : λ*sVOL + (1-λ)*hit.volW;
+        series[w] = (sVOL && sVOL>0) ? (sMFV/sVOL) : null;
+      } else if (isFin(hit.cmf)) {
+        fallback.push({ w, value: hit.cmf });
       }
     }
-    flowMap[t] = fSeries;
-    perfMap[t] = pSeries;
+    flowMap[t] = Object.keys(series).length ? series : ewma(fallback, λ);
   }
 
-  // Cross-sectional percentiles by week
-  const xsec = (map)=>{
-    const out={};
-    for(const w of wkArr){
-      const pair=[];
-      for(const t in map){ const v = map[t][w]; if(v!=null && isFin(v)) pair.push([t,v]); }
+  // ---- 2) Build decayed Price series: log-returns (raw or σ-scaled) ----
+  const SCALE_MOM = 'off'; // set to 'on' if you want σ-scaling
+  const perfMap = {};
+  for (const t in wkByT){
+    let sVar = null;
+    const series = {};
+    for (const w of wkArr){
+      const hit = wkByT[t][w]; if (!hit) continue;
+      // prefer weekly log-returns if present; fallback to log(1+ret)
+      let r = isFin(hit.retLog) ? hit.retLog : (isFin(hit.ret) ? Math.log(1 + hit.ret) : null);
+      if (r == null) { series[w] = null; continue; }
+      if (SCALE_MOM === 'on'){
+        sVar = (sVar==null) ? (r*r) : (λ*sVar + (1-λ)*r*r);
+        const sigma = Math.sqrt(Math.max(1e-12, sVar));
+        series[w] = r / sigma;
+      } else {
+        series[w] = r; // raw log-return keeps more cross-sectional contrast
+      }
+    }
+    perfMap[t] = series;
+  }
+
+  // ---- 3) Cross-sectional percentiles for each leg (per week) ----
+  function xsec(map){
+    const out = {};
+    for (const w of wkArr){
+      const pair = [];
+      for (const t in map){ const v = map[t][w]; if (v!=null && isFin(v)) pair.push([t,v]); }
       pair.sort((a,b)=>a[1]-b[1]);
-      const n=pair.length;
-      for(let i=0;i<n;i++) (out[pair[i][0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50;
+      const n = pair.length;
+      for (let i=0;i<n;i++) (out[pair[i][0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50;
     }
     return out;
-  };
+  }
+  const fPct = xsec(flowMap);
+  const pPct = xsec(perfMap);
 
-  const fPct = xsec(flowMap), pPct = xsec(perfMap), out={};
-  for(const t in wkByT){
-    for(const w of wkArr){
-      const f=(fPct[t]||{})[w], p=(pPct[t]||{})[w];
-      if(f==null||p==null) continue;
-      (out[t] ||= {})[w] = Math.round(0.65*f + 0.35*p);
+  // ---- 4) 65/35 blend in percentile space ----
+  const blended = {};
+  for (const t in wkByT){
+    for (const w of wkArr){
+      const f = (fPct[t]||{})[w], p = (pPct[t]||{})[w];
+      if (f==null || p==null) continue;
+      (blended[t] ||= {})[w] = 0.65*f + 0.35*p; // no rounding yet
+    }
+  }
+
+  // ---- 5) Re‑percentile the blended score per week (forces clear ranking) ----
+  const out = {};
+  for (const w of wkArr){
+    const pair = [];
+    for (const t in blended){ const v = blended[t][w]; if (v!=null && isFin(v)) pair.push([t,v]); }
+    pair.sort((a,b)=>a[1]-b[1]);
+    const n = pair.length;
+    for (let i=0;i<n;i++){
+      (out[pair[i][0]] ||= {})[w] = n>1 ? Math.round(i*100/(n-1)) : 50;
     }
   }
   return out;
